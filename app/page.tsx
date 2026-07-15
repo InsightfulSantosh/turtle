@@ -810,13 +810,42 @@ function App() {
             </article>
           </div>
           <div className="upgrade-table">
-            <div><span>Layer</span><b>AI pilot now</b><b>Scaled production model</b></div>
-            <div><span>Visual representation</span><p>Pretrained deep neural image feature print</p><p>FashionCLIP/SigLIP fine-tuned on planner-approved pairs</p></div>
-            <div><span>Quantity logic</span><p>Validation-tuned analogue + regularized regression ensemble</p><p>Hierarchical gradient boosting with season, channel, stock-out and markdown features</p></div>
-            <div><span>Uncertainty</span><p>Out-of-fold conformal quantity range</p><p>Rolling temporal calibration by category and channel</p></div>
-            <div><span>Workflow</span><p>Browser-session planner override</p><p>Authenticated approvals and audit trail</p></div>
+            <div><span>Layer</span><b>Hosted sample now</b><b>Scale platform implementation</b></div>
+            <div><span>Visual representation</span><p>Pretrained deep neural image feature print</p><p>Isolated FashionCLIP image/text service; fine-tuning job awaits reviewed pairs</p></div>
+            <div><span>Retrieval</span><p>All 33 historical styles scored in-browser</p><p>Metadata-filtered pgvector HNSW top-200 retrieval, then top-10 re-ranking</p></div>
+            <div><span>Quantity logic</span><p>Validation-tuned analogue + regularized regression ensemble</p><p>P10/P50/P90 LightGBM training and inference with MinTrace hierarchy reconciliation</p></div>
+            <div><span>Uncertainty</span><p>Out-of-fold conformal quantity range</p><p>Temporal quantiles calibrated by category, channel and region</p></div>
+            <div><span>Workflow</span><p>Browser-session planner override</p><p>Durable batch jobs, feedback capture, model registry and recommendation audit schema</p></div>
             <div><span>Data</span><p>33 historical / 167 upcoming samples</p><p>3–5 seasons plus inventory and markdown context</p></div>
           </div>
+          <section className="scale-platform">
+            <div className="scale-platform-heading">
+              <div>
+                <span className="eyebrow">Production path / 200K–500K items</span>
+                <h2>The scale engine is implemented without overstating model readiness</h2>
+                <p>The software path is ready to deploy. Client data is still required to fit, validate and approve the learned models.</p>
+              </div>
+              <span className="scale-badge">AI v3 architecture</span>
+            </div>
+            <div className="scale-readiness-grid">
+              {[
+                ["Code ready", "Vector catalogue", "512-dimensional half-vector storage, hard metadata filters and HNSW nearest-neighbour retrieval."],
+                ["Code ready", "Fashion embedding service", "Containerized FashionCLIP image/text inference with domain allowlisting, size limits and private-network blocking."],
+                ["Needs client labels", "Learning-to-rank", "CatBoost training and model loading use planner relevance feedback, outcome reliability and product evidence."],
+                ["Needs 3–5 seasons", "Demand forecasting", "Temporal P10/P50/P90 LightGBM training uses clean stock-out, markdown, channel and hierarchy features."],
+                ["Needs calibration", "Hierarchy + risk", "MinTrace reconciliation keeps category, channel and region totals coherent before order constraints."],
+                ["Code ready", "Operations", "MOQ, pack, budget and capacity optimisation plus durable ingestion, batch, feedback and audit records."],
+              ].map(([state, title, copy]) => (
+                <article key={title} className={state === "Code ready" ? "ready" : "waiting"}>
+                  <span>{state}</span><h3>{title}</h3><p>{copy}</p>
+                </article>
+              ))}
+            </div>
+            <div className="activation-gate">
+              <b>Production activation gate</b>
+              <span>The service can be configured to refuse startup until approved ranker and demand-model artifacts are mounted—preventing a rule-based fallback from being presented as trained AI.</span>
+            </div>
+          </section>
         </section>
       )}
 

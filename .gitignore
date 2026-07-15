@@ -30,6 +30,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!ml-service/.env.scale.example
 
 # vercel
 .vercel
@@ -46,3 +47,5 @@ next-env.d.ts
 /ml-service/artifacts/*.joblib
 /ml-service/.pytest_cache/
 /ml-service/**/__pycache__/
+/models/
+/model-cache/

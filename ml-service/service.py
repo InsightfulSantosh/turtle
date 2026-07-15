@@ -13,13 +13,14 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
+from season_intelligence.contracts import BusinessConstraints
 from season_intelligence.model import (
     FeatureEncoder,
     attribute_similarity,
     combined_similarity,
-    normalized_demand,
     recommend_one,
 )
+from season_intelligence.platform import build_scale_engine, serialize_recommendation
 
 
 APP_ROOT = Path(__file__).resolve().parents[1]
@@ -57,6 +58,115 @@ class RecommendationRequest(BaseModel):
 
     product: ProductInput
     settings: DecisionSettings = Field(default_factory=DecisionSettings)
+
+
+class ScaleProductInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=3, max_length=80)
+    itemType: str = Field(min_length=1, max_length=40)
+    gender: str | None = Field(default=None, max_length=40)
+    brand: str | None = Field(default=None, max_length=80)
+    sleeve: str = Field(default="", max_length=80)
+    provision: str = Field(default="", max_length=80)
+    pattern: str = Field(default="", max_length=120)
+    range: str = Field(default="", max_length=120)
+    fit: str = Field(default="", max_length=120)
+    fabric: str = Field(default="", max_length=200)
+    fashion: str = Field(default="", max_length=80)
+    lifecycle: str = Field(default="", max_length=80)
+    colour: str = Field(default="", max_length=120)
+    mrp: float = Field(gt=0, le=1_000_000)
+    imageUrl: str | None = Field(default=None, max_length=2_048)
+    embedding: list[float] | None = Field(default=None, min_length=1, max_length=2_048)
+
+
+class ScaleConstraints(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    packSize: int = Field(default=25, ge=1, le=10_000)
+    minimumOrder: int = Field(default=100, ge=0, le=10_000_000)
+    maximumOrder: int = Field(default=2_000, ge=0, le=10_000_000)
+    unitCost: float | None = Field(default=None, gt=0, le=1_000_000)
+    budget: float | None = Field(default=None, gt=0, le=10_000_000_000)
+    supplierCapacity: int | None = Field(default=None, ge=0, le=10_000_000)
+
+    def to_contract(self) -> BusinessConstraints:
+        return BusinessConstraints(
+            pack_size=self.packSize,
+            minimum_order=self.minimumOrder,
+            maximum_order=self.maximumOrder,
+            unit_cost=self.unitCost,
+            budget=self.budget,
+            supplier_capacity=self.supplierCapacity,
+        )
+
+
+class ScaleRecommendationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    product: ScaleProductInput
+    constraints: ScaleConstraints = Field(default_factory=ScaleConstraints)
+    retrievalLimit: int = Field(default=200, ge=10, le=500)
+    topK: int = Field(default=10, ge=1, le=50)
+
+
+class BatchRecommendationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[ScaleRecommendationRequest] = Field(min_length=1, max_length=1_000)
+
+
+class SimilarityFeedbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    upcomingItemId: str = Field(min_length=3, max_length=80)
+    historicalItemId: str = Field(min_length=3, max_length=80)
+    accepted: bool
+    relevance: int | None = Field(default=None, ge=0, le=4)
+    plannerId: str | None = Field(default=None, max_length=120)
+    requestId: str | None = Field(default=None, max_length=80)
+    notes: str | None = Field(default=None, max_length=1_000)
+
+
+class PlannerDecisionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["approve", "override"]
+    quantity: int = Field(ge=0, le=10_000_000)
+    plannerId: str = Field(min_length=1, max_length=120)
+
+
+class CatalogPerformanceInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    season: str = Field(min_length=2, max_length=40)
+    channel: str = Field(default="all", max_length=80)
+    region: str = Field(default="all", max_length=80)
+    orderQuantity: int = Field(ge=0)
+    dispatchQuantity: int | None = Field(default=None, ge=0)
+    salesQuantity: int = Field(ge=0)
+    sellThrough: float | None = Field(default=None, ge=0, le=10)
+    normalizedDemand: float = Field(ge=0)
+    stockoutDays: int | None = Field(default=None, ge=0)
+    markdownRate: float | None = Field(default=None, ge=0, le=1)
+    grossMargin: float | None = None
+    seasonEnd: str | None = Field(default=None, max_length=20)
+    qualityFlags: list[str] = Field(default_factory=list, max_length=50)
+
+
+class CatalogItemInput(ScaleProductInput):
+    isHistorical: bool
+    active: bool = True
+    embeddingModel: str | None = Field(default=None, max_length=120)
+    metadata: dict[str, str | int | float | bool | None] = Field(default_factory=dict)
+    performance: list[CatalogPerformanceInput] = Field(default_factory=list, max_length=100)
+
+
+class CatalogBatchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[CatalogItemInput] = Field(min_length=1, max_length=1_000)
 
 
 class ModelRuntime:
@@ -112,6 +222,7 @@ class ModelRuntime:
 
 
 RUNTIME = ModelRuntime(ARTIFACT_PATH)
+SCALE_ENGINE = build_scale_engine()
 app = FastAPI(
     title="Turtle Season Intelligence API",
     version=RUNTIME.model["version"],
@@ -119,7 +230,11 @@ app = FastAPI(
     redoc_url=None,
 )
 
-allowed_origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if origin.strip()]
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
@@ -141,7 +256,11 @@ async def request_logging(request: Request, call_next):
     started = time.perf_counter()
     response = await call_next(request)
     response.headers["X-Request-ID"] = request_id
-    response.headers["X-Model-Version"] = RUNTIME.model["version"]
+    response.headers["X-Model-Version"] = (
+        SCALE_ENGINE.model_version
+        if request.url.path.startswith("/v2") and SCALE_ENGINE is not None
+        else RUNTIME.model["version"]
+    )
     LOGGER.info(
         "request_id=%s method=%s path=%s status=%s elapsed_ms=%.1f",
         request_id,
@@ -156,6 +275,24 @@ async def request_logging(request: Request, call_next):
 @app.get("/healthz", include_in_schema=False)
 def health() -> dict:
     return {"status": "ok", "modelVersion": RUNTIME.model["version"]}
+
+
+@app.get("/v2/health/ready", include_in_schema=False)
+def scale_readiness() -> dict:
+    configured = SCALE_ENGINE is not None
+    database_ready = False
+    if configured:
+        try:
+            database_ready = bool(SCALE_ENGINE.repository.ready())
+        except Exception:  # readiness must fail closed without leaking infrastructure details
+            database_ready = False
+    return {
+        "status": "ready" if configured and database_ready else "sample_only",
+        "scaleRuntimeConfigured": configured,
+        "databaseReady": database_ready,
+        "sampleModelVersion": RUNTIME.model["version"],
+        "scaleModelVersion": SCALE_ENGINE.model_version if configured else "3.0.0",
+    }
 
 
 @app.get("/v1/model", dependencies=[Depends(require_api_key)])
@@ -188,3 +325,74 @@ def existing_recommendation(item_id: str) -> dict:
 @app.post("/v1/recommendations", dependencies=[Depends(require_api_key)])
 def create_recommendation(payload: RecommendationRequest) -> dict:
     return RUNTIME.recommend(payload)
+
+
+def require_scale_engine():
+    if SCALE_ENGINE is None:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Scale runtime is not configured. Set DATABASE_URL and EMBEDDING_SERVICE_URL; "
+                "v1 sample endpoints remain available."
+            ),
+        )
+    return SCALE_ENGINE
+
+
+@app.post("/v2/recommendations", dependencies=[Depends(require_api_key)])
+def create_scale_recommendation(payload: ScaleRecommendationRequest) -> dict:
+    engine = require_scale_engine()
+    try:
+        result = engine.recommend(
+            payload.product.model_dump(exclude_none=True),
+            payload.constraints.to_contract(),
+            retrieval_limit=payload.retrievalLimit,
+            top_k=payload.topK,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        LOGGER.exception("scale recommendation dependency failed")
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return serialize_recommendation(result)
+
+
+@app.post("/v2/recommendations:batch", status_code=202, dependencies=[Depends(require_api_key)])
+def create_recommendation_batch(payload: BatchRecommendationRequest) -> dict:
+    engine = require_scale_engine()
+    job_id = engine.repository.create_job("recommendation_batch", payload.model_dump(exclude_none=True))
+    return {"jobId": job_id, "status": "queued", "itemCount": len(payload.items)}
+
+
+@app.post("/v2/catalog/items:batch", status_code=202, dependencies=[Depends(require_api_key)])
+def create_catalog_batch(payload: CatalogBatchRequest) -> dict:
+    engine = require_scale_engine()
+    job_id = engine.repository.create_job("catalog_ingestion", payload.model_dump(exclude_none=True))
+    return {"jobId": job_id, "status": "queued", "itemCount": len(payload.items)}
+
+
+@app.get("/v2/jobs/{job_id}", dependencies=[Depends(require_api_key)])
+def get_batch_job(job_id: str) -> dict:
+    engine = require_scale_engine()
+    job = engine.repository.get_job(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+@app.post("/v2/feedback/similarity", status_code=201, dependencies=[Depends(require_api_key)])
+def create_similarity_feedback(payload: SimilarityFeedbackRequest) -> dict:
+    engine = require_scale_engine()
+    feedback_id = engine.repository.record_feedback(payload.model_dump(exclude_none=True))
+    return {"feedbackId": feedback_id, "status": "recorded"}
+
+
+@app.post("/v2/recommendations/{request_id}/decision", dependencies=[Depends(require_api_key)])
+def create_planner_decision(request_id: str, payload: PlannerDecisionRequest) -> dict:
+    engine = require_scale_engine()
+    recorded = engine.repository.record_planner_decision(request_id, payload.model_dump())
+    if not recorded:
+        raise HTTPException(status_code=404, detail="Recommendation not found")
+    return {"requestId": request_id, "status": "recorded", "decision": payload.decision}
