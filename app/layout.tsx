@@ -4,7 +4,7 @@ import "./globals.css";
 
 const title = "Turtle Season Intelligence | AI Merchandise Planning";
 const description =
-  "Deep-vision product matching, validated demand modelling, uncertainty ranges, and explainable seasonal order recommendations.";
+  "FashionCLIP product matching, validated demand modelling, uncertainty ranges, and explainable seasonal order recommendations.";
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();

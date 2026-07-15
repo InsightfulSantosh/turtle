@@ -8,7 +8,7 @@ hierarchical reconciliation, operational constraints, batch jobs, and feedback.
 ## What the demo includes
 
 - 167 upcoming styles and 33 historical styles from the supplied sample files
-- pretrained deep-vision similarity across the supplied product images
+- FashionCLIP 2.0 fashion-domain image similarity across the supplied product images
 - attribute/vision weights and neighbour count selected by validation
 - top historical analogues with component-level match evidence
 - analogue and regularized-regression demand ensemble
@@ -36,11 +36,16 @@ and read-only converted XLSB copies in `../tmp/converted`.
 ```bash
 python scripts/prepare_sample_data.py downloads
 curl -L --config ../tmp/vision-images.curl.conf
-PYTHON=python3 ./ml-service/tools/build_deep_features.sh
+python -m venv .venv
+.venv/bin/pip install -r ml-service/requirements-fashionclip.txt
+HF_HOME=.model-cache PYTHON=.venv/bin/python ./ml-service/tools/build_fashion_clip_features.sh
 ```
 
 The model artifact is stored in `app/generated-data.json`, so the local client
-demo does not require a live model server. The production API contract,
+demo does not require a live model server after embeddings have been generated.
+The official `patrickjohncyh/fashion-clip` checkpoint is downloaded into the
+local `.model-cache` directory and is never sent to ChatGPT. Product images are
+read from the local `../tmp/vision-images` directory. The production API contract,
 container, tests, and model documentation are in `ml-service`.
 
 The architecture is production-oriented, but the fitted quantity model is

@@ -20,6 +20,6 @@ test("renders the season-intelligence AI workspace", async () => {
   assert.match(html, /Turtle Season Intelligence/i);
   assert.match(html, /Upcoming assortment/i);
   assert.match(html, /AI buy recommendation/i);
-  assert.match(html, /Deep-vision retrieval/i);
+  assert.match(html, /FashionCLIP retrieval/i);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });

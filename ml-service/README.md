@@ -7,7 +7,7 @@ container deployment.
 
 ## Model
 
-- Deep image representation: Apple Vision FeaturePrint v2 for the local pilot.
+- Deep image representation: FashionCLIP 2.0 512-dimensional image embeddings for the local pilot.
 - Attribute evidence: weighted categorical, family, token, and price similarity.
 - Retrieval: attribute/vision weight and neighbour count selected by out-of-fold validation.
 - Demand: sell-through-normalized analogue demand blended with regularized regression.
@@ -16,7 +16,7 @@ container deployment.
 The pilot is intentionally marked as limited-data. It has 33 historical outcomes,
 so it uses leave-one-out validation. A production fit should use three to five
 clean seasons and a temporal holdout, then replace the local image provider with
-a containerized FashionCLIP or SigLIP embedding service.
+a client-tuned FashionCLIP embedding service after reviewed match pairs are available.
 
 ## Scalable v3 path (200,000–500,000 items)
 
@@ -39,11 +39,15 @@ if the ranker or demand artifacts are absent.
 ## Refresh the model artifact on macOS
 
 ```bash
-PYTHON=python3 ./tools/build_deep_features.sh
+../.venv/bin/pip install -r requirements-fashionclip.txt
+HF_HOME=../.model-cache PYTHON=../.venv/bin/python ./tools/build_fashion_clip_features.sh
 ```
 
-This reads the already downloaded source images, computes neural image distances,
-tunes the ensemble using out-of-fold predictions, and refreshes the frontend model artifact.
+This reads the already downloaded source images, generates unit-normalized
+FashionCLIP image vectors, computes cosine distances, tunes the ensemble using
+out-of-fold predictions, and refreshes the frontend model artifact. The exported
+metadata records the exact checkpoint revision, vector dimension, execution
+device, and image coverage for auditability.
 
 ## Run the API
 
@@ -67,7 +71,7 @@ Endpoints:
 - `POST /v2/feedback/similarity`
 - `POST /v2/recommendations/{request_id}/decision`
 
-For new products, the caller supplies deep-vision similarities keyed by historical
+For new products, the caller supplies FashionCLIP similarities keyed by historical
 item ID. In production that map is produced by the image-embedding service.
 
 ## Training commands

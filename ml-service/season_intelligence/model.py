@@ -9,7 +9,7 @@ from typing import Any, Iterable
 import numpy as np
 
 
-MODEL_VERSION = "2.0.0"
+MODEL_VERSION = "2.1.0"
 DEFAULT_TARGET_SELL_THROUGH = 0.70
 PACK_SIZE = 25
 MIN_BUY = 100
@@ -503,13 +503,21 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "confidenceCounts": confidence_counts,
         "visualScoreRange": [round(min(all_visual_scores), 3), round(max(all_visual_scores), 3)] if all_visual_scores else [0, 0],
-        "visualMethod": vision_output.get("engine", "Deep neural image embedding"),
+        "visualMethod": vision_output.get("engine", "FashionCLIP image embedding"),
+        "visionModel": {
+            "modelId": vision_output.get("modelId", "unknown"),
+            "modelRevision": vision_output.get("modelRevision"),
+            "embeddingDimension": vision_output.get("embeddingDimension"),
+            "device": vision_output.get("device", "unknown"),
+            "historicalCoverage": vision_output.get("historicalCoverage", 0),
+            "upcomingCoverage": vision_output.get("upcomingCoverage", 0),
+        },
         "model": {
             "version": MODEL_VERSION,
             "status": "Pilot validated — production architecture",
             "trainingRows": count,
             "targetSellThrough": DEFAULT_TARGET_SELL_THROUGH,
-            "algorithm": "Calibrated deep-vision retrieval + regularized demand ensemble",
+            "algorithm": "Calibrated FashionCLIP retrieval + regularized demand ensemble",
             "attributeWeight": round(attribute_weight, 2),
             "visualWeight": round(1 - attribute_weight, 2),
             "topK": int(fitted["topK"]),
@@ -524,7 +532,10 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
             "medianDistance": round(calibration.median, 4),
             "q10Distance": round(calibration.q10, 4),
             "q90Distance": round(calibration.q90, 4),
-            "method": "Robust logistic calibration of neural feature-print distance",
+            "method": vision_output.get(
+                "calibrationMethod",
+                "Robust logistic calibration of neural embedding distance",
+            ),
         },
         "dataQuality": anomaly_counts,
     })

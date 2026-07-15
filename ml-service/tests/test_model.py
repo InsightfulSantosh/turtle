@@ -44,7 +44,12 @@ def test_normalized_demand_contains_bad_sales_row() -> None:
 
 def test_generated_artifact_contract() -> None:
     data = json.loads((APP_ROOT / "app" / "generated-data.json").read_text(encoding="utf-8"))
-    assert data["meta"]["model"]["version"] == "2.0.0"
+    assert data["meta"]["model"]["version"] == "2.1.0"
+    assert "FashionCLIP" in data["meta"]["visualMethod"]
+    assert data["meta"]["visionModel"]["modelId"] == "patrickjohncyh/fashion-clip"
+    assert data["meta"]["visionModel"]["embeddingDimension"] == 512
+    assert data["meta"]["visionModel"]["historicalCoverage"] == data["meta"]["historicalImageCoverage"]
+    assert data["meta"]["visionModel"]["upcomingCoverage"] == data["meta"]["upcomingImageCoverage"]
     assert data["meta"]["model"]["trainingRows"] == len(data["historical"])
     assert 0 <= data["meta"]["model"]["backtest"]["wape"] <= 1
     assert len(data["upcoming"]) == data["meta"]["upcomingItems"]

@@ -83,6 +83,14 @@ type Dataset = {
     missingUpcomingImages: string[];
     confidenceCounts: Record<Confidence, number>;
     visualMethod: string;
+    visionModel: {
+      modelId: string;
+      modelRevision: string | null;
+      embeddingDimension: number;
+      device: string;
+      historicalCoverage: number;
+      upcomingCoverage: number;
+    };
     model: {
       version: string;
       status: string;
@@ -399,7 +407,7 @@ function App() {
         "Top historical match",
         "Combined similarity",
         "Attribute similarity",
-        "Deep-vision similarity",
+        "FashionCLIP similarity",
         "Confidence",
         "Analogue model quantity",
         "Regularized model quantity",
@@ -567,7 +575,7 @@ function App() {
                 <div className="recommendation-topline">
                   <div>
                     <span className="card-label">AI buy recommendation</span>
-                    <p>Deep-vision retrieval + validated demand ensemble</p>
+                    <p>FashionCLIP retrieval + validated demand ensemble</p>
                   </div>
                   <ConfidencePill confidence={decision.confidence} />
                 </div>
@@ -645,8 +653,8 @@ function App() {
                   </select>
                 </label>
                 <div className="method-note">
-                  <span>Deep vision + learned demand</span>
-                  <p>Neural image features, validation-selected weights and top-K, regularized regression, and finite-sample conformal uncertainty.</p>
+                  <span>FashionCLIP + learned demand</span>
+                  <p>Fashion-domain image embeddings, validation-selected weights and top-K, regularized regression, and finite-sample conformal uncertainty.</p>
                 </div>
               </aside>
             </div>
@@ -657,7 +665,7 @@ function App() {
                   <span className="eyebrow">Ranked historical analogues</span>
                   <h2>Why these styles are relevant</h2>
                 </div>
-                <div className="score-legend"><span><i className="attr" /> Attribute</span><span><i className="visual" /> Deep vision</span></div>
+                <div className="score-legend"><span><i className="attr" /> Attribute</span><span><i className="visual" /> FashionCLIP</span></div>
               </div>
               <div className="match-grid">
                 {decision.ranked.slice(0, 5).map((match, index) => {
@@ -700,7 +708,7 @@ function App() {
                 <div className="evidence-scores">
                   <ScoreRing score={focusedMatch.combinedScore} label="Combined" />
                   <ScoreRing score={focusedMatch.attributeScore} label="Attributes" />
-                  <ScoreRing score={focusedMatch.visualScore ?? 0} label="Deep vision" />
+                  <ScoreRing score={focusedMatch.visualScore ?? 0} label="FashionCLIP" />
                 </div>
                 <div className="attribute-evidence">
                   {Object.entries(focusedMatch.attributeBreakdown).map(([key, value]) => (
@@ -725,7 +733,7 @@ function App() {
           </div>
           <div className="kpi-grid">
             <article><span>Total styles</span><strong>{dataset.meta.upcomingItems}</strong><small>{dataset.meta.upcomingImageCoverage} with images</small></article>
-            <article><span>Deep-vision coverage</span><strong>{scorePercent(dataset.meta.upcomingImageCoverage / dataset.meta.upcomingItems)}</strong><small>{dataset.meta.missingUpcomingImages.length} linked-image exceptions</small></article>
+            <article><span>FashionCLIP coverage</span><strong>{scorePercent(dataset.meta.upcomingImageCoverage / dataset.meta.upcomingItems)}</strong><small>{dataset.meta.missingUpcomingImages.length} linked-image exceptions</small></article>
             <article><span>LOO backtest WAPE</span><strong>{scorePercent(dataset.meta.model.backtest.wape)}</strong><small>MAE {numberFormatter.format(dataset.meta.model.backtest.mae)} units</small></article>
             <article className="accent"><span>Recommended buy</span><strong>{numberFormatter.format(totalBuy)}</strong><small>units across sample</small></article>
           </div>
@@ -764,13 +772,13 @@ function App() {
       {tab === "method" && (
         <section className="method-page page-wrap">
           <div className="page-heading method-heading">
-            <div><span className="eyebrow">AI with measurable evidence</span><h1>How model v{dataset.meta.model.version} reaches a recommendation</h1><p>A deep-vision retrieval and demand-learning workflow with validation, uncertainty, data guardrails, and planner control.</p></div>
-            <div className="poc-badge"><span>AI v2</span><small>Pilot-trained model</small></div>
+            <div><span className="eyebrow">AI with measurable evidence</span><h1>How model v{dataset.meta.model.version} reaches a recommendation</h1><p>A FashionCLIP retrieval and demand-learning workflow with validation, uncertainty, data guardrails, and planner control.</p></div>
+            <div className="poc-badge"><span>AI v2.1</span><small>FashionCLIP pilot</small></div>
           </div>
           <div className="workflow-grid">
             {[
               ["01", "Validate inputs", "Normalize identifiers and attributes, link images, and quarantine inconsistent order, dispatch, sales, and sell-through values."],
-              ["02", "Encode products", "Create structured attribute evidence and deep neural feature prints from the garment images."],
+              ["02", "Encode products", "Create structured attribute evidence and 512-dimensional FashionCLIP embeddings from garment images."],
               ["03", "Learn retrieval", "Tune attribute/vision weights and the neighbour count using out-of-fold historical predictions."],
               ["04", "Predict demand", "Ensemble similarity-weighted analogue demand with a regularized multivariate regression baseline."],
               ["05", "Quantify risk", "Generate a finite-sample conformal range, apply pack and quantity limits, and route uncertain buys to a planner."],
@@ -782,7 +790,7 @@ function App() {
               <h2>Readable enough to challenge</h2>
               <div className="formula">
                 <p>Match score</p>
-                <strong>{attributeWeight}% × Attribute + {visualWeight}% × Deep vision</strong>
+                <strong>{attributeWeight}% × Attribute + {visualWeight}% × FashionCLIP</strong>
               </div>
               <div className="formula">
                 <p>Historical demand target</p>
@@ -811,8 +819,8 @@ function App() {
           </div>
           <div className="upgrade-table">
             <div><span>Layer</span><b>Local sample now</b><b>Scale platform implementation</b></div>
-            <div><span>Visual representation</span><p>Pretrained deep neural image feature print</p><p>Isolated FashionCLIP image/text service; fine-tuning job awaits reviewed pairs</p></div>
-            <div><span>Retrieval</span><p>All 33 historical styles scored in-browser</p><p>Metadata-filtered pgvector HNSW top-200 retrieval, then top-10 re-ranking</p></div>
+            <div><span>Visual representation</span><p>{dataset.meta.visionModel.modelId} · {dataset.meta.visionModel.embeddingDimension}D cosine · revision {dataset.meta.visionModel.modelRevision?.slice(0, 8) ?? "unknown"}</p><p>Fine-tuned FashionCLIP image/text service; client-specific tuning awaits reviewed pairs</p></div>
+            <div><span>Retrieval</span><p>Precomputed attribute and FashionCLIP scoring against all 33 historical styles</p><p>Metadata-filtered pgvector HNSW top-200 retrieval, then top-10 re-ranking</p></div>
             <div><span>Quantity logic</span><p>Validation-tuned analogue + regularized regression ensemble</p><p>P10/P50/P90 LightGBM training and inference with MinTrace hierarchy reconciliation</p></div>
             <div><span>Uncertainty</span><p>Out-of-fold conformal quantity range</p><p>Temporal quantiles calibrated by category, channel and region</p></div>
             <div><span>Workflow</span><p>Browser-session planner override</p><p>Durable batch jobs, feedback capture, model registry and recommendation audit schema</p></div>
