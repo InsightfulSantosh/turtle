@@ -333,6 +333,7 @@ function App() {
     () => makeDecision(selected, attributeWeight, visualWeight, targetSellThrough, topK),
     [selected, attributeWeight, visualWeight, targetSellThrough, topK],
   );
+  const selectedMatches = decision.ranked.slice(0, topK);
 
   useEffect(() => {
     if (!toast) return;
@@ -364,8 +365,8 @@ function App() {
   }, [portfolio, queueSearch, segment, confidenceFilter]);
 
   const focusedMatch =
-    decision.ranked.find((match) => match.historicalId === focusedHistoricalId) ??
-    decision.ranked[0];
+    selectedMatches.find((match) => match.historicalId === focusedHistoricalId) ??
+    selectedMatches[0];
   const focusedHistory = focusedMatch ? historyById.get(focusedMatch.historicalId) : undefined;
   const finalQuantity = overrides[selected.id] ?? decision.quantity;
 
@@ -644,13 +645,20 @@ function App() {
                   <span><b>Target sell-through</b><strong>{targetSellThrough}%</strong></span>
                   <input type="range" min="50" max="90" value={targetSellThrough} onChange={(event) => setTargetSellThrough(Number(event.target.value))} />
                 </label>
-                <label className="select-control">
-                  Historical analogues
-                  <select value={topK} onChange={(event) => setTopK(Number(event.target.value))}>
-                    <option value="3">Top 3</option>
-                    <option value="5">Top 5</option>
-                    <option value="8">Top 8</option>
+                <label className="select-control analogue-count-control">
+                  <span>
+                    <b>Products used in recommendation</b>
+                    <strong>{topK === dataset.meta.model.topK ? "Validated default" : "Custom scenario"}</strong>
+                  </span>
+                  <select aria-label="Products used in recommendation" value={topK} onChange={(event) => {
+                    setTopK(Number(event.target.value));
+                    setFocusedHistoricalId(null);
+                  }}>
+                    <option value="3">3 closest products</option>
+                    <option value="5">5 closest products</option>
+                    <option value="8">8 closest products</option>
                   </select>
+                  <small>Every selected product is shown below and contributes to the quantity calculation.</small>
                 </label>
                 <div className="method-note">
                   <span>FashionCLIP + learned demand</span>
@@ -664,11 +672,15 @@ function App() {
                 <div>
                   <span className="eyebrow">Ranked historical analogues</span>
                   <h2>Why these styles are relevant</h2>
+                  <p className="section-supporting-copy">Showing all {topK} products used in this recommendation, ranked from {decision.ranked.length} eligible historical styles.</p>
                 </div>
-                <div className="score-legend"><span><i className="attr" /> Attribute</span><span><i className="visual" /> FashionCLIP</span></div>
+                <div className="analogue-header-tools">
+                  <span className="analogue-count-chip">{topK} used</span>
+                  <div className="score-legend"><span><i className="attr" /> Attribute</span><span><i className="visual" /> FashionCLIP</span></div>
+                </div>
               </div>
-              <div className="match-grid">
-                {decision.ranked.slice(0, 5).map((match, index) => {
+              <div className={`match-grid match-grid-${topK}`}>
+                {selectedMatches.map((match, index) => {
                   const historical = historyById.get(match.historicalId);
                   if (!historical) return null;
                   return (
@@ -703,7 +715,7 @@ function App() {
                 <div className="evidence-intro">
                   <span className="eyebrow">Match evidence</span>
                   <h2>{selected.id} ↔ {focusedHistory.id}</h2>
-                  <p>Component scores show exactly what drove the recommendation. Click another analogue above to inspect its evidence.</p>
+                  <p>Component scores show exactly what drove the recommendation. Select any of the {topK} included analogues above to inspect its evidence.</p>
                 </div>
                 <div className="evidence-scores">
                   <ScoreRing score={focusedMatch.combinedScore} label="Combined" />

@@ -21,5 +21,7 @@ test("renders the season-intelligence AI workspace", async () => {
   assert.match(html, /Upcoming assortment/i);
   assert.match(html, /AI buy recommendation/i);
   assert.match(html, /FashionCLIP retrieval/i);
+  assert.match(html, /Showing all .*8.* products used in this recommendation/i);
+  assert.equal((html.match(/class="match-card/g) ?? []).length, 8);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });
