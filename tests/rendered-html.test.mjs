@@ -12,7 +12,7 @@ async function render() {
   );
 }
 
-test("renders the season-intelligence POC", async () => {
+test("renders the season-intelligence AI workspace", async () => {
   const response = await render();
   assert.equal(response.status, 200);
   assert.match(response.headers.get("content-type") ?? "", /^text\/html\b/i);
@@ -20,5 +20,6 @@ test("renders the season-intelligence POC", async () => {
   assert.match(html, /Turtle Season Intelligence/i);
   assert.match(html, /Upcoming assortment/i);
   assert.match(html, /AI buy recommendation/i);
+  assert.match(html, /Deep-vision retrieval/i);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/i);
 });

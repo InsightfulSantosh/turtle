@@ -2,9 +2,9 @@ import type { Metadata } from "next";
 import { headers } from "next/headers";
 import "./globals.css";
 
-const title = "Turtle Season Intelligence | AI Merchandise Planning POC";
+const title = "Turtle Season Intelligence | AI Merchandise Planning";
 const description =
-  "Compare upcoming products with historical analogues, inspect attribute and visual similarity, and review explainable order-quantity recommendations.";
+  "Deep-vision product matching, validated demand modelling, uncertainty ranges, and explainable seasonal order recommendations.";
 
 export async function generateMetadata(): Promise<Metadata> {
   const requestHeaders = await headers();
@@ -26,7 +26,7 @@ export async function generateMetadata(): Promise<Metadata> {
       title,
       description,
       type: "website",
-      images: [{ url: "/og.png", width: 1731, height: 909, alt: "Turtle Season Intelligence merchandise-planning POC" }],
+      images: [{ url: "/og.png", width: 1731, height: 909, alt: "Turtle Season Intelligence AI merchandise-planning workspace" }],
     },
     twitter: {
       card: "summary_large_image",

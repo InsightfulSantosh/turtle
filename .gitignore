@@ -41,3 +41,8 @@ next-env.d.ts
 /.wrangler/
 /outputs/
 /work/
+/.venv/
+/ml-service/artifacts/*.json
+/ml-service/artifacts/*.joblib
+/ml-service/.pytest_cache/
+/ml-service/**/__pycache__/

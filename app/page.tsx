@@ -28,6 +28,8 @@ type HistoricalItem = {
   sellThrough: number;
   imageUrl?: string | null;
   hasVisualFeature: boolean;
+  normalizedDemand: number;
+  qualityFlags: string[];
 };
 
 type Match = {
@@ -61,7 +63,13 @@ type UpcomingItem = {
     low: number;
     high: number;
     confidence: Confidence;
+    analogueQuantity: number;
+    regressionQuantity: number;
+    intervalHalfWidth: number;
+    topMatchScore: number;
+    modelVersion: string;
   };
+  modelFlags: string[];
 };
 
 type Dataset = {
@@ -75,6 +83,32 @@ type Dataset = {
     missingUpcomingImages: string[];
     confidenceCounts: Record<Confidence, number>;
     visualMethod: string;
+    model: {
+      version: string;
+      status: string;
+      trainingRows: number;
+      targetSellThrough: number;
+      algorithm: string;
+      attributeWeight: number;
+      visualWeight: number;
+      topK: number;
+      regressionBlend: number;
+      ridgeAlpha: number;
+      conformalHalfWidth: number;
+      evaluation: string;
+      interval: string;
+      backtest: {
+        wape: number;
+        mae: number;
+        bias: number;
+        intervalCoverage: number;
+      };
+    };
+    dataQuality: {
+      dispatchAboveOrder: number;
+      salesAboveDispatch: number;
+      sellThroughAbove100: number;
+    };
   };
   historical: HistoricalItem[];
   upcoming: UpcomingItem[];
@@ -87,6 +121,9 @@ type Decision = {
   low: number;
   high: number;
   confidence: Confidence;
+  analogueQuantity: number;
+  regressionQuantity: number;
+  intervalHalfWidth: number;
 };
 
 const dataset = dataJson as unknown as Dataset;
@@ -151,39 +188,53 @@ function makeDecision(
   top.forEach((match) => {
     const historical = historyById.get(match.historicalId);
     if (!historical) return;
-    const base = (historical.order + historical.dispatch) / 2;
-    const performanceFactor = clamp(
-      historical.sellThrough / Math.max(targetSellThrough / 100, 0.01),
-      0.65,
-      1.35,
-    );
-    const adjusted = base * performanceFactor;
+    const adjusted = historical.normalizedDemand *
+      (dataset.meta.model.targetSellThrough / Math.max(targetSellThrough / 100, 0.01));
     const weight = Math.max(match.combinedScore, 0.01) ** 2;
     numerator += adjusted * weight;
     denominator += weight;
   });
 
-  const quantity = clamp(roundPack(numerator / Math.max(denominator, 0.01)), 100, 2000);
+  const analogueQuantity = numerator / Math.max(denominator, 0.01);
+  const regressionQuantity = item.recommendation.regressionQuantity *
+    (dataset.meta.model.targetSellThrough / Math.max(targetSellThrough / 100, 0.01));
+  const blend = dataset.meta.model.regressionBlend;
+  const rawQuantity = analogueQuantity * (1 - blend) + regressionQuantity * blend;
+  const quantity = clamp(roundPack(rawQuantity), 100, 2000);
   const topScore = top[0]?.combinedScore ?? 0;
   const averageTop =
     top.slice(0, 3).reduce((sum, match) => sum + match.combinedScore, 0) /
     Math.max(top.slice(0, 3).length, 1);
+  const intervalHalfWidth = dataset.meta.model.conformalHalfWidth *
+    (dataset.meta.model.targetSellThrough / Math.max(targetSellThrough / 100, 0.01)) *
+    (1 + Math.max(0, 0.7 - topScore));
+  const issueCount = top.slice(0, 3).reduce((sum, match) => {
+    const historical = historyById.get(match.historicalId);
+    return sum + (historical?.qualityFlags.length ?? 0);
+  }, 0);
+  const relativeWidth = intervalHalfWidth / Math.max(quantity, 1);
   let confidence: Confidence = "Low";
-  let spread = 0.25;
-  if (topScore >= 0.82 && averageTop >= 0.72) {
+  if (
+    topScore >= 0.84 &&
+    averageTop >= 0.72 &&
+    relativeWidth <= 0.5 &&
+    top[0]?.visualScore !== null &&
+    issueCount === 0
+  ) {
     confidence = "High";
-    spread = 0.1;
-  } else if (topScore >= 0.67 && averageTop >= 0.58) {
+  } else if (topScore >= 0.62 && averageTop >= 0.52 && relativeWidth <= 0.9) {
     confidence = "Medium";
-    spread = 0.16;
   }
 
   return {
     ranked,
     quantity,
-    low: roundPack(quantity * (1 - spread)),
-    high: roundPack(quantity * (1 + spread)),
+    low: clamp(roundPack(quantity - intervalHalfWidth), 100, 2000),
+    high: clamp(roundPack(quantity + intervalHalfWidth), 100, 2000),
     confidence,
+    analogueQuantity: roundPack(analogueQuantity),
+    regressionQuantity: roundPack(regressionQuantity),
+    intervalHalfWidth: roundPack(intervalHalfWidth),
   };
 }
 
@@ -198,8 +249,8 @@ function ProductImage({
   className?: string;
   eager?: boolean;
 }) {
-  const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [src]);
+  const [failedSrc, setFailedSrc] = useState<string | null>(null);
+  const failed = Boolean(src && failedSrc === src);
 
   if (!src || failed) {
     return (
@@ -211,13 +262,15 @@ function ProductImage({
   }
 
   return (
+    // Product images are remote, dynamic catalogue URLs and cannot use a fixed Next image allowlist.
+    // eslint-disable-next-line @next/next/no-img-element
     <img
       className={className}
       src={src}
       alt={alt}
       loading={eager ? "eager" : "lazy"}
       referrerPolicy="no-referrer"
-      onError={() => setFailed(true)}
+      onError={() => setFailedSrc(src ?? null)}
     />
   );
 }
@@ -259,10 +312,10 @@ function App() {
   const [queueSearch, setQueueSearch] = useState("");
   const [segment, setSegment] = useState("All");
   const [confidenceFilter, setConfidenceFilter] = useState("All");
-  const [attributeWeight, setAttributeWeight] = useState(65);
-  const [visualWeight, setVisualWeight] = useState(35);
-  const [targetSellThrough, setTargetSellThrough] = useState(70);
-  const [topK, setTopK] = useState(5);
+  const [attributeWeight, setAttributeWeight] = useState(Math.round(dataset.meta.model.attributeWeight * 100));
+  const [visualWeight, setVisualWeight] = useState(Math.round(dataset.meta.model.visualWeight * 100));
+  const [targetSellThrough, setTargetSellThrough] = useState(Math.round(dataset.meta.model.targetSellThrough * 100));
+  const [topK, setTopK] = useState(dataset.meta.model.topK);
   const [focusedHistoricalId, setFocusedHistoricalId] = useState<string | null>(null);
   const [overrides, setOverrides] = useState<Record<string, number>>({});
   const [toast, setToast] = useState("");
@@ -272,10 +325,6 @@ function App() {
     () => makeDecision(selected, attributeWeight, visualWeight, targetSellThrough, topK),
     [selected, attributeWeight, visualWeight, targetSellThrough, topK],
   );
-
-  useEffect(() => {
-    setFocusedHistoricalId(decision.ranked[0]?.historicalId ?? null);
-  }, [selectedId, attributeWeight, visualWeight]);
 
   useEffect(() => {
     if (!toast) return;
@@ -312,13 +361,6 @@ function App() {
   const focusedHistory = focusedMatch ? historyById.get(focusedMatch.historicalId) : undefined;
   const finalQuantity = overrides[selected.id] ?? decision.quantity;
 
-  const highConfidenceCount = portfolio.filter(
-    ({ decision: itemDecision }) => itemDecision.confidence === "High",
-  ).length;
-  const mediumConfidenceCount = portfolio.filter(
-    ({ decision: itemDecision }) => itemDecision.confidence === "Medium",
-  ).length;
-  const lowConfidenceCount = portfolio.length - highConfidenceCount - mediumConfidenceCount;
   const totalBuy = portfolio.reduce(
     (sum, { item, decision: itemDecision }) => sum + (overrides[item.id] ?? itemDecision.quantity),
     0,
@@ -326,6 +368,7 @@ function App() {
 
   function chooseItem(id: string) {
     setSelectedId(id);
+    setFocusedHistoricalId(null);
     setTab("compare");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -356,11 +399,14 @@ function App() {
         "Top historical match",
         "Combined similarity",
         "Attribute similarity",
-        "Visual similarity",
+        "Deep-vision similarity",
         "Confidence",
+        "Analogue model quantity",
+        "Regularized model quantity",
         "Recommended quantity",
         "Planner quantity",
         "Target sell-through",
+        "Model version",
       ],
       ...portfolio.map(({ item, decision: itemDecision }) => {
         const top = itemDecision.ranked[0];
@@ -375,9 +421,12 @@ function App() {
           Math.round((top?.attributeScore ?? 0) * 100),
           top?.visualScore === null ? "" : Math.round((top?.visualScore ?? 0) * 100),
           itemDecision.confidence,
+          itemDecision.analogueQuantity,
+          itemDecision.regressionQuantity,
           itemDecision.quantity,
           overrides[item.id] ?? "",
           targetSellThrough,
+          dataset.meta.model.version,
         ];
       }),
     ];
@@ -415,7 +464,7 @@ function App() {
           ))}
         </nav>
         <div className="top-actions">
-          <span className="sync-state"><i /> Sample synchronized</span>
+          <span className="sync-state"><i /> AI model v{dataset.meta.model.version} ready</span>
           <button className="button secondary" onClick={exportCsv}>Export CSV</button>
           <span className="avatar" aria-label="Planner profile">SD</span>
         </div>
@@ -458,7 +507,10 @@ function App() {
                 <button
                   key={item.id}
                   className={`queue-item ${selected.id === item.id ? "selected" : ""}`}
-                  onClick={() => setSelectedId(item.id)}
+                  onClick={() => {
+                    setSelectedId(item.id);
+                    setFocusedHistoricalId(null);
+                  }}
                 >
                   <ProductImage src={item.imageUrl} alt={item.id} className="queue-image" />
                   <span className="queue-copy">
@@ -515,7 +567,7 @@ function App() {
                 <div className="recommendation-topline">
                   <div>
                     <span className="card-label">AI buy recommendation</span>
-                    <p>Similarity-weighted historical demand</p>
+                    <p>Deep-vision retrieval + validated demand ensemble</p>
                   </div>
                   <ConfidencePill confidence={decision.confidence} />
                 </div>
@@ -532,13 +584,14 @@ function App() {
                 <div className="rationale-box">
                   <span className="rationale-icon">✦</span>
                   <p>
-                    Based on <b>{topK} nearest historical styles</b>. The leading analogue scored {scorePercent(decision.ranked[0]?.combinedScore ?? 0)}, with historical sell-through normalized to a {targetSellThrough}% target.
+                    <b>{topK} neural and attribute analogues</b> are blended with a regularized demand model. The range is calibrated from out-of-fold errors, not a fixed percentage.
                   </p>
                 </div>
                 <div className="recommendation-metrics">
                   <div><small>Top analogue</small><strong>{decision.ranked[0]?.historicalId}</strong></div>
-                  <div><small>Top match</small><strong>{scorePercent(decision.ranked[0]?.combinedScore ?? 0)}</strong></div>
-                  <div><small>Planner status</small><strong>{overrides[selected.id] ? "Adjusted" : "Pending review"}</strong></div>
+                  <div><small>Analogue demand</small><strong>{numberFormatter.format(decision.analogueQuantity)}</strong></div>
+                  <div><small>ML baseline</small><strong>{numberFormatter.format(decision.regressionQuantity)}</strong></div>
+                  <div><small>Backtest WAPE</small><strong>{scorePercent(dataset.meta.model.backtest.wape)}</strong></div>
                 </div>
                 <div className="override-row">
                   <label>
@@ -592,8 +645,8 @@ function App() {
                   </select>
                 </label>
                 <div className="method-note">
-                  <span>POC visual engine</span>
-                  <p>Garment-region colour, structure, texture and edge features. Production replaces this with fashion embeddings.</p>
+                  <span>Deep vision + learned demand</span>
+                  <p>Neural image features, validation-selected weights and top-K, regularized regression, and finite-sample conformal uncertainty.</p>
                 </div>
               </aside>
             </div>
@@ -604,7 +657,7 @@ function App() {
                   <span className="eyebrow">Ranked historical analogues</span>
                   <h2>Why these styles are relevant</h2>
                 </div>
-                <div className="score-legend"><span><i className="attr" /> Attribute</span><span><i className="visual" /> Visual</span></div>
+                <div className="score-legend"><span><i className="attr" /> Attribute</span><span><i className="visual" /> Deep vision</span></div>
               </div>
               <div className="match-grid">
                 {decision.ranked.slice(0, 5).map((match, index) => {
@@ -647,7 +700,7 @@ function App() {
                 <div className="evidence-scores">
                   <ScoreRing score={focusedMatch.combinedScore} label="Combined" />
                   <ScoreRing score={focusedMatch.attributeScore} label="Attributes" />
-                  <ScoreRing score={focusedMatch.visualScore ?? 0} label="Visual" />
+                  <ScoreRing score={focusedMatch.visualScore ?? 0} label="Deep vision" />
                 </div>
                 <div className="attribute-evidence">
                   {Object.entries(focusedMatch.attributeBreakdown).map(([key, value]) => (
@@ -672,8 +725,8 @@ function App() {
           </div>
           <div className="kpi-grid">
             <article><span>Total styles</span><strong>{dataset.meta.upcomingItems}</strong><small>{dataset.meta.upcomingImageCoverage} with images</small></article>
-            <article><span>High confidence</span><strong>{highConfidenceCount}</strong><small>{Math.round((highConfidenceCount / portfolio.length) * 100)}% ready for review</small></article>
-            <article><span>Needs judgement</span><strong>{lowConfidenceCount}</strong><small>{mediumConfidenceCount} medium confidence</small></article>
+            <article><span>Deep-vision coverage</span><strong>{scorePercent(dataset.meta.upcomingImageCoverage / dataset.meta.upcomingItems)}</strong><small>{dataset.meta.missingUpcomingImages.length} linked-image exceptions</small></article>
+            <article><span>LOO backtest WAPE</span><strong>{scorePercent(dataset.meta.model.backtest.wape)}</strong><small>MAE {numberFormatter.format(dataset.meta.model.backtest.mae)} units</small></article>
             <article className="accent"><span>Recommended buy</span><strong>{numberFormatter.format(totalBuy)}</strong><small>units across sample</small></article>
           </div>
           <div className="portfolio-toolbar">
@@ -711,16 +764,16 @@ function App() {
       {tab === "method" && (
         <section className="method-page page-wrap">
           <div className="page-heading method-heading">
-            <div><span className="eyebrow">Explainable by design</span><h1>How the POC reaches a recommendation</h1><p>A transparent retrieval and decision-support workflow, designed for planner validation before production use.</p></div>
-            <div className="poc-badge"><span>POC</span><small>Client demonstration</small></div>
+            <div><span className="eyebrow">AI with measurable evidence</span><h1>How model v{dataset.meta.model.version} reaches a recommendation</h1><p>A deep-vision retrieval and demand-learning workflow with validation, uncertainty, data guardrails, and planner control.</p></div>
+            <div className="poc-badge"><span>AI v2</span><small>Pilot-trained model</small></div>
           </div>
           <div className="workflow-grid">
             {[
-              ["01", "Normalize", "Create a canonical item key and standardize category, fabric, colour and range values."],
-              ["02", "Compare attributes", "Score category, sleeve, fit, pattern, fabric, colour and price-band similarity."],
-              ["03", "Compare visuals", "Extract garment-region colour, structure, texture and edge features from every image."],
-              ["04", "Rank analogues", "Blend configurable attribute and visual scores to retrieve the most relevant history."],
-              ["05", "Recommend buy", "Weight historical order and dispatch by sell-through and similarity, then round to case pack."],
+              ["01", "Validate inputs", "Normalize identifiers and attributes, link images, and quarantine inconsistent order, dispatch, sales, and sell-through values."],
+              ["02", "Encode products", "Create structured attribute evidence and deep neural feature prints from the garment images."],
+              ["03", "Learn retrieval", "Tune attribute/vision weights and the neighbour count using out-of-fold historical predictions."],
+              ["04", "Predict demand", "Ensemble similarity-weighted analogue demand with a regularized multivariate regression baseline."],
+              ["05", "Quantify risk", "Generate a finite-sample conformal range, apply pack and quantity limits, and route uncertain buys to a planner."],
             ].map(([number, title, copy]) => <article key={number}><span>{number}</span><h3>{title}</h3><p>{copy}</p></article>)}
           </div>
           <div className="method-columns">
@@ -729,33 +782,38 @@ function App() {
               <h2>Readable enough to challenge</h2>
               <div className="formula">
                 <p>Match score</p>
-                <strong>{attributeWeight}% × Attribute + {visualWeight}% × Visual</strong>
+                <strong>{attributeWeight}% × Attribute + {visualWeight}% × Deep vision</strong>
               </div>
               <div className="formula">
-                <p>Performance-adjusted quantity</p>
-                <strong>Average(Order, Dispatch) × Sell-through / {targetSellThrough}% target</strong>
+                <p>Historical demand target</p>
+                <strong>Sales ÷ {targetSellThrough}% sell-through, winsorized by available supply</strong>
               </div>
               <div className="formula">
-                <p>Final recommendation</p>
-                <strong>Similarity-weighted top {topK} × constraints × 25-unit pack rounding</strong>
+                <p>Demand ensemble</p>
+                <strong>{Math.round((1 - dataset.meta.model.regressionBlend) * 100)}% analogue AI + {Math.round(dataset.meta.model.regressionBlend * 100)}% regularized regression</strong>
+              </div>
+              <div className="formula">
+                <p>Uncertainty</p>
+                <strong>80% conformal interval + 25-unit pack + 100–2,000 unit guardrails</strong>
               </div>
             </article>
             <article className="readiness-card">
-              <span className="card-label">Data readiness</span>
-              <h2>What the sample proves</h2>
+              <span className="card-label">Model validation</span>
+              <h2>What is measured</h2>
               <ul>
-                <li><b>{dataset.meta.historicalItems}/{dataset.meta.historicalItems}</b> historical styles linked to images</li>
-                <li><b>{dataset.meta.upcomingImageCoverage}/{dataset.meta.upcomingItems}</b> upcoming styles linked to images</li>
-                <li><b>{dataset.meta.missingUpcomingImages.length}</b> upcoming image exceptions flagged</li>
-                <li><b>199/199</b> supplied image URLs accessible during validation</li>
+                <li><b>{scorePercent(dataset.meta.model.backtest.wape)} WAPE</b> in leave-one-out validation</li>
+                <li><b>{numberFormatter.format(dataset.meta.model.backtest.mae)} units</b> mean absolute error</li>
+                <li><b>{scorePercent(dataset.meta.model.backtest.intervalCoverage)}</b> empirical interval coverage</li>
+                <li><b>{dataset.meta.dataQuality.dispatchAboveOrder + dataset.meta.dataQuality.salesAboveDispatch}</b> order/dispatch/sales anomalies contained by guardrails</li>
               </ul>
-              <div className="warning-note">Production quantity accuracy requires more seasons, consistent sales windows, replenishment and stock-out data, MOQ and budget constraints.</div>
+              <div className="warning-note">The architecture is production-oriented; the fitted quantity model remains a pilot because only {dataset.meta.model.trainingRows} historical rows are available. Three to five clean seasons are required for a credible temporal production backtest.</div>
             </article>
           </div>
           <div className="upgrade-table">
-            <div><span>Layer</span><b>POC now</b><b>Production upgrade</b></div>
-            <div><span>Visual representation</span><p>Garment-region handcrafted feature vector</p><p>Fashion-specific deep image embedding</p></div>
-            <div><span>Quantity logic</span><p>Explainable similarity-weighted rule</p><p>Backtested hierarchical demand model</p></div>
+            <div><span>Layer</span><b>AI pilot now</b><b>Scaled production model</b></div>
+            <div><span>Visual representation</span><p>Pretrained deep neural image feature print</p><p>FashionCLIP/SigLIP fine-tuned on planner-approved pairs</p></div>
+            <div><span>Quantity logic</span><p>Validation-tuned analogue + regularized regression ensemble</p><p>Hierarchical gradient boosting with season, channel, stock-out and markdown features</p></div>
+            <div><span>Uncertainty</span><p>Out-of-fold conformal quantity range</p><p>Rolling temporal calibration by category and channel</p></div>
             <div><span>Workflow</span><p>Browser-session planner override</p><p>Authenticated approvals and audit trail</p></div>
             <div><span>Data</span><p>33 historical / 167 upcoming samples</p><p>3–5 seasons plus inventory and markdown context</p></div>
           </div>
