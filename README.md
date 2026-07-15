@@ -1,7 +1,7 @@
 # Turtle Season Intelligence AI
 
-A client-ready AI pilot plus a scale service for seasonal merchandise planning.
-The hosted demo uses the supplied sample artifact. The deployable service adds
+A client-ready local AI pilot plus a scale service for seasonal merchandise planning.
+The local demo uses the supplied sample artifact. The deployable service adds
 FashionCLIP embeddings, pgvector retrieval, learning-to-rank, quantile demand,
 hierarchical reconciliation, operational constraints, batch jobs, and feedback.
 
@@ -39,7 +39,7 @@ curl -L --config ../tmp/vision-images.curl.conf
 PYTHON=python3 ./ml-service/tools/build_deep_features.sh
 ```
 
-The model artifact is stored in `app/generated-data.json`, so the hosted client
+The model artifact is stored in `app/generated-data.json`, so the local client
 demo does not require a live model server. The production API contract,
 container, tests, and model documentation are in `ml-service`.
 

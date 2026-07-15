@@ -810,7 +810,7 @@ function App() {
             </article>
           </div>
           <div className="upgrade-table">
-            <div><span>Layer</span><b>Hosted sample now</b><b>Scale platform implementation</b></div>
+            <div><span>Layer</span><b>Local sample now</b><b>Scale platform implementation</b></div>
             <div><span>Visual representation</span><p>Pretrained deep neural image feature print</p><p>Isolated FashionCLIP image/text service; fine-tuning job awaits reviewed pairs</p></div>
             <div><span>Retrieval</span><p>All 33 historical styles scored in-browser</p><p>Metadata-filtered pgvector HNSW top-200 retrieval, then top-10 re-ranking</p></div>
             <div><span>Quantity logic</span><p>Validation-tuned analogue + regularized regression ensemble</p><p>P10/P50/P90 LightGBM training and inference with MinTrace hierarchy reconciliation</p></div>
