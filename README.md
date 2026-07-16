@@ -126,9 +126,9 @@ flags these issues and constrains their effect rather than silently trusting the
 
 - Upcoming product queue with image, pattern/colour, collection/fit, MRP,
   recommended buy, match-confidence and demand-uncertainty signals
-- Consistent upcoming and historical match-attribute catalogs: Category,
-  Pattern, Collection and Fabric appear first; `+5 Show all 9` reveals Colour,
-  Sleeve, Fit code, Season family and Price band
+- Consistent upcoming and historical match-attribute catalogs: Colour,
+  Price band, Pattern and Fabric appear first; `+5 Show all 9` reveals Category,
+  Collection, Sleeve, Fit code and Season family
 - Side-by-side upcoming and historical product images
 - Ranked historical analogue cards with the same expandable nine attributes,
   order and sell-through alongside the similarity evidence

@@ -221,15 +221,15 @@ const attributeLabels: Record<string, string> = {
 };
 
 const catalogAttributeOrder = [
-  "category",
-  "pattern",
-  "fit",
-  "fabric",
   "colour",
+  "price",
+  "pattern",
+  "fabric",
+  "category",
+  "fit",
   "sleeve",
   "provision",
   "lifecycle",
-  "price",
 ] as const;
 
 function attributeValue(item: ComparableProduct, key: string) {

@@ -56,6 +56,7 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.match(pageSource, /Both catalogs show the same four primary fields/);
   assert.match(pageSource, /attributeValueReaders/);
   assert.match(pageSource, /catalogAttributeOrder/);
+  assert.match(pageSource, /const catalogAttributeOrder = \[\s*"colour",\s*"price",\s*"pattern",\s*"fabric",/s);
   assert.match(pageSource, /Season family/);
   assert.match(pageSource, /Workbook attribute audit/);
   assert.match(pageSource, /informative fields retained/);
