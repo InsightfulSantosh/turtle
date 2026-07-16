@@ -912,16 +912,51 @@ function App() {
             </section>
 
             {focusedHistory && focusedMatch && (
-              <section className="evidence-panel">
-                <div className="evidence-intro">
-                  <span className="eyebrow">Match evidence</span>
-                  <h2>{selected.id} ↔ {focusedHistory.id}</h2>
-                  <p>Both catalogs show the same four primary fields and can expand to all {Object.keys(focusedMatch.attributeBreakdown).length} scored attributes. The comparison below explains every match contribution.</p>
+              <section className="evidence-panel" aria-label={`${selected.id} compared with ${focusedHistory.id}`}>
+                <div className="evidence-header">
+                  <div className="evidence-intro">
+                    <span className="eyebrow">Match evidence</span>
+                    <h2>Why this analogue matched</h2>
+                    <p>The overall similarity combines product attributes with FashionCLIP image similarity. Review every scored field below before using this historical style as demand evidence.</p>
+                    <div className="evidence-product-pair">
+                      <div className="evidence-product-card">
+                        <ProductImage src={selected.imageUrl} alt={`Upcoming ${selected.id}`} className="evidence-product-image" />
+                        <span>
+                          <small>Upcoming style</small>
+                          <strong>{selected.id}</strong>
+                          <b>{selected.pattern} · {selected.colour}</b>
+                        </span>
+                      </div>
+                      <i className="evidence-pair-arrow" aria-hidden="true">↔</i>
+                      <div className="evidence-product-card">
+                        <ProductImage src={focusedHistory.imageUrl} alt={`Historical ${focusedHistory.id}`} className="evidence-product-image" />
+                        <span>
+                          <small>Historical analogue</small>
+                          <strong>{focusedHistory.id}</strong>
+                          <b>{focusedHistory.pattern} · {focusedHistory.colour}</b>
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <aside className="evidence-summary" aria-label="Similarity score summary">
+                    <div className="evidence-summary-heading">
+                      <span>Similarity scores</span>
+                      <small>Higher is closer</small>
+                    </div>
+                    <div className="evidence-scores">
+                      <ScoreRing score={focusedMatch.combinedScore} label="Overall" />
+                      <ScoreRing score={focusedMatch.attributeScore} label="Attributes" />
+                      <ScoreRing score={focusedMatch.visualScore ?? 0} label="Image" />
+                    </div>
+                    <p>Image score uses FashionCLIP; the overall score uses the selected attribute and visual weights.</p>
+                  </aside>
                 </div>
-                <div className="evidence-scores">
-                  <ScoreRing score={focusedMatch.combinedScore} label="Combined" />
-                  <ScoreRing score={focusedMatch.attributeScore} label="Attributes" />
-                  <ScoreRing score={focusedMatch.visualScore ?? 0} label="FashionCLIP" />
+                <div className="evidence-attribute-heading">
+                  <div>
+                    <span>Attribute-by-attribute comparison</span>
+                    <p>Upcoming value versus historical value across all {Object.keys(focusedMatch.attributeBreakdown).length} active matching fields.</p>
+                  </div>
+                  <small>Exact, related, partial or different</small>
                 </div>
                 <div className="attribute-evidence">
                   {Object.entries(focusedMatch.attributeBreakdown).map(([key, value]) => {
