@@ -436,7 +436,7 @@ function MatchAttributeCatalog({
         aria-expanded={expanded}
         onClick={() => setExpanded((current) => !current)}
       >
-        {expanded ? "Show 4 only" : "+5 Show all 9"}
+        {expanded ? "Show 4 key attributes" : "View all 9 attributes"}
       </button>
     </section>
   );
