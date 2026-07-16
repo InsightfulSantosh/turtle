@@ -17,6 +17,7 @@ from season_intelligence.contracts import BusinessConstraints
 from season_intelligence.model import (
     attribute_similarity,
     combined_similarity,
+    demand_uncertainty,
     fit_demand_pipeline,
     recommend_one,
 )
@@ -213,6 +214,14 @@ class ModelRuntime:
         scale = float(self.model["targetSellThrough"]) / payload.settings.targetSellThrough
         for key in ("quantity", "low", "high", "analogueQuantity", "regressionQuantity", "intervalHalfWidth"):
             result[key] = max(100, min(2_000, int(round((result[key] * scale) / 25) * 25)))
+        result["uncertaintyRatio"] = round(
+            result["intervalHalfWidth"] / max(result["quantity"], 1),
+            4,
+        )
+        result["demandUncertainty"] = demand_uncertainty(
+            result["quantity"],
+            result["intervalHalfWidth"],
+        )
         return {
             "requestId": str(uuid.uuid4()),
             "productId": item["id"],

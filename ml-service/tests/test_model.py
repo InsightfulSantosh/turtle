@@ -8,8 +8,11 @@ import numpy as np
 from season_intelligence.model import (
     attribute_similarity,
     calibrate_vision,
+    demand_uncertainty,
     fit_demand_pipeline,
+    match_confidence,
     normalized_demand,
+    recommend_one,
 )
 
 
@@ -56,9 +59,14 @@ def test_demand_model_uses_sklearn_pipeline() -> None:
     assert np.isfinite(pipeline.predict([rows[0]])[0])
 
 
+def test_match_confidence_is_separate_from_demand_uncertainty() -> None:
+    assert match_confidence([0.90, 0.80, 0.75], has_visual=True, issue_count=0) == "High"
+    assert demand_uncertainty(quantity=650, interval_half_width=325) == "Wide"
+
+
 def test_generated_artifact_contract() -> None:
     data = json.loads((APP_ROOT / "app" / "generated-data.json").read_text(encoding="utf-8"))
-    assert data["meta"]["model"]["version"] == "2.2.0"
+    assert data["meta"]["model"]["version"] == "2.3.0"
     assert data["meta"]["model"]["demandLibrary"] == "scikit-learn"
     assert "FashionCLIP" in data["meta"]["visualMethod"]
     assert data["meta"]["visionModel"]["modelId"] == "patrickjohncyh/fashion-clip"
@@ -70,7 +78,26 @@ def test_generated_artifact_contract() -> None:
     assert len(data["upcoming"]) == data["meta"]["upcomingItems"]
     for item in data["upcoming"]:
         recommendation = item["recommendation"]
+        assert recommendation["confidence"] == recommendation["matchConfidence"]
+        assert recommendation["demandUncertainty"] in {"Narrow", "Moderate", "Wide"}
         assert recommendation["low"] <= recommendation["quantity"] <= recommendation["high"]
         assert recommendation["quantity"] % 25 == 0
         assert all(0 <= match["attributeScore"] <= 1 for match in item["matches"])
         assert all(match["visualScore"] is None or 0 <= match["visualScore"] <= 1 for match in item["matches"])
+
+    model = data["meta"]["model"]
+    history = data["historical"]
+    targets = np.asarray([float(item["normalizedDemand"]) for item in history])
+    pipeline = fit_demand_pipeline(history, targets, float(model["ridgeAlpha"]))
+    representative = next(item for item in data["upcoming"] if item["id"] == "OTSH-98427-1001")
+    reproduced = recommend_one(
+        representative,
+        history,
+        representative["matches"],
+        targets,
+        pipeline,
+        model,
+    )
+    assert reproduced["quantity"] == representative["recommendation"]["quantity"]
+    assert reproduced["matchConfidence"] == representative["recommendation"]["matchConfidence"]
+    assert reproduced["demandUncertainty"] == representative["recommendation"]["demandUncertainty"]

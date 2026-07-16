@@ -29,7 +29,7 @@ external hosting or authentication platform.
 | Historical image coverage | 33 / 33 |
 | Upcoming image coverage | 164 / 167 |
 | Missing upcoming images | 3 |
-| POC model version | 2.2.0 |
+| POC model version | 2.3.0 |
 | FashionCLIP dimension | 512 |
 
 The three upcoming items without a usable local image are
@@ -92,15 +92,22 @@ default model; changing a control does not retrain the model.
 | Forecast bias | +3.07% |
 | Empirical conformal interval coverage | 87.88% |
 | Conformal half-width before similarity adjustment | 325 units |
-| Medium-confidence upcoming items | 58 |
-| Low-confidence upcoming items | 108 |
-| High-confidence upcoming items | 1 |
+| High match-confidence items | 27 |
+| Medium match-confidence items | 120 |
+| Low match-confidence items | 20 |
+| Narrow demand-uncertainty ranges | 0 |
+| Moderate demand-uncertainty ranges | 5 |
+| Wide demand-uncertainty ranges | 162 |
 
 These results are evidence for a POC, not production certification. Leave-one-out
 validation is used because only 33 historical outcomes were supplied. A credible
 production assessment needs at least three clean seasons and a forward temporal
-holdout. The predominance of low-confidence recommendations reflects the small
-sample and wide uncertainty.
+holdout. Model v2.3 reports two deliberately separate signals: match confidence
+describes the relevance and quality of the historical analogues, while demand
+uncertainty describes the conformal forecast half-width relative to the proposed
+buy. A product can therefore have a high-confidence match and a wide demand
+range. The predominance of wide ranges reflects the small 33-outcome sample and
+large out-of-fold forecast errors.
 
 The fitted data also contains eight dispatch-above-order records, one
 sales-above-dispatch record and one sell-through-above-100% record. The pipeline
@@ -108,14 +115,16 @@ flags these issues and constrains their effect rather than silently trusting the
 
 ## User experience
 
-- Upcoming product queue with image, attribute and confidence filters
+- Upcoming product queue with image, attribute, match-confidence and
+  demand-uncertainty filters
 - Side-by-side upcoming and historical product images
 - Ranked analogue cards with combined, attribute and FashionCLIP evidence
 - Top 3, 5 or 8 analogue scenarios; every selected analogue is displayed and
   contributes to the calculation
 - Validated-default versus custom-scenario labels
 - Target sell-through and similarity-weight scenarios
-- Recommended quantity, range, confidence and model components
+- Recommended quantity, expected demand range, separate decision signals and
+  model components
 - Planner quantity override and approval interaction
 - Portfolio table, filters, totals and CSV export
 - Methodology page with model provenance and production-readiness boundaries
@@ -178,7 +187,7 @@ Python model and scale components:
 .venv/bin/python -m pytest -q ml-service/tests
 ```
 
-The current suite contains 11 Python tests plus a local frontend/model-contract
+The current suite contains 12 Python tests plus a local frontend/model-contract
 test; `npm test` also performs a complete standard Next.js production build.
 
 ## Scale architecture status

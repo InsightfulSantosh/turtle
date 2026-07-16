@@ -15,7 +15,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 
-MODEL_VERSION = "2.2.0"
+MODEL_VERSION = "2.3.0"
 DEFAULT_TARGET_SELL_THROUGH = 0.70
 PACK_SIZE = 25
 MIN_BUY = 100
@@ -380,21 +380,31 @@ def backtest_model(
     }
 
 
-def recommendation_confidence(
+def match_confidence(
     top_scores: list[float],
-    quantity: float,
-    interval_half_width: float,
     has_visual: bool,
     issue_count: int,
 ) -> str:
+    """Rate analogue relevance without mixing in forecast-range width."""
+
     top = top_scores[0] if top_scores else 0.0
     mean_top = float(np.mean(top_scores[:3])) if top_scores else 0.0
-    relative_width = interval_half_width / max(quantity, 1.0)
-    if top >= 0.84 and mean_top >= 0.72 and relative_width <= 0.50 and has_visual and issue_count == 0:
+    if top >= 0.84 and mean_top >= 0.72 and has_visual and issue_count == 0:
         return "High"
-    if top >= 0.62 and mean_top >= 0.52 and relative_width <= 0.90:
+    if top >= 0.62 and mean_top >= 0.52:
         return "Medium"
     return "Low"
+
+
+def demand_uncertainty(quantity: float, interval_half_width: float) -> str:
+    """Label uncertainty from the conformal half-width relative to the buy."""
+
+    relative_half_width = interval_half_width / max(quantity, 1.0)
+    if relative_half_width <= 0.20:
+        return "Narrow"
+    if relative_half_width <= 0.40:
+        return "Moderate"
+    return "Wide"
 
 
 def recommend_one(
@@ -420,12 +430,16 @@ def recommend_one(
     top_visual_available = bool(selected and selected[0].get("visualScore") is not None)
     interval = float(model["conformalHalfWidth"]) * (1.0 + max(0.0, 0.7 - (top_scores[0] if top_scores else 0.0)))
     issue_count = sum(len(quality_flags(history[history_index[match["historicalId"]]])) for match in selected[:3])
-    confidence = recommendation_confidence(top_scores, quantity, interval, top_visual_available, issue_count)
+    relevance = match_confidence(top_scores, top_visual_available, issue_count)
+    uncertainty = demand_uncertainty(quantity, interval)
     return {
         "quantity": quantity,
         "low": int(clamp(round_pack(quantity - interval), MIN_BUY, MAX_BUY)),
         "high": int(clamp(round_pack(quantity + interval), MIN_BUY, MAX_BUY)),
-        "confidence": confidence,
+        "matchConfidence": relevance,
+        "demandUncertainty": uncertainty,
+        "uncertaintyRatio": round(interval / max(quantity, 1.0), 4),
+        "confidence": relevance,
         "analogueQuantity": round_pack(analogue),
         "regressionQuantity": round_pack(regression),
         "intervalHalfWidth": round_pack(interval),
@@ -464,11 +478,14 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
     targets = np.asarray([normalized_demand(item) for item in history], dtype=np.float64)
     fitted = backtest_model(history, attribute_matrix, visual_matrix, targets)
     for item, target in zip(history, targets):
-        item["normalizedDemand"] = round_pack(float(target))
+        # Retain enough precision for API-side reproduction after loading the
+        # artifact. Final order recommendations are pack-rounded later.
+        item["normalizedDemand"] = round(float(target), 4)
         item["qualityFlags"] = quality_flags(item)
 
     attribute_weight = float(fitted["attributeWeight"])
-    confidence_counts = {"High": 0, "Medium": 0, "Low": 0}
+    match_confidence_counts = {"High": 0, "Medium": 0, "Low": 0}
+    uncertainty_counts = {"Narrow": 0, "Moderate": 0, "Wide": 0}
     all_visual_scores: list[float] = []
     for item in upcoming:
         matches: list[dict[str, Any]] = []
@@ -496,7 +513,8 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
             fitted,
         )
         item["modelFlags"] = ["missing_image"] if matches and matches[0]["visualScore"] is None else []
-        confidence_counts[item["recommendation"]["confidence"]] += 1
+        match_confidence_counts[item["recommendation"]["matchConfidence"]] += 1
+        uncertainty_counts[item["recommendation"]["demandUncertainty"]] += 1
 
     anomaly_counts = {
         "dispatchAboveOrder": sum("dispatch_above_order" in item["qualityFlags"] for item in history),
@@ -507,7 +525,9 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
     meta.update({
         "title": "Turtle Season Intelligence AI",
         "generatedAt": datetime.now(timezone.utc).isoformat(),
-        "confidenceCounts": confidence_counts,
+        "confidenceCounts": match_confidence_counts,
+        "matchConfidenceCounts": match_confidence_counts,
+        "demandUncertaintyCounts": uncertainty_counts,
         "visualScoreRange": [round(min(all_visual_scores), 3), round(max(all_visual_scores), 3)] if all_visual_scores else [0, 0],
         "visualMethod": vision_output.get("engine", "FashionCLIP image embedding"),
         "visionModel": {

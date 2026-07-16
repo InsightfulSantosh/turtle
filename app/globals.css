@@ -319,7 +319,7 @@ select:focus-visible {
 .queue-filters {
   display: grid;
   gap: 8px;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 0.75fr 1.15fr 1.15fr;
   margin: 10px 0 14px;
 }
 
@@ -404,7 +404,14 @@ select {
   white-space: nowrap;
 }
 
-.mini-confidence {
+.mini-signals {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px 7px;
+}
+
+.mini-confidence,
+.mini-uncertainty {
   align-items: center;
   display: flex;
   font-size: 8px;
@@ -413,7 +420,8 @@ select {
   text-transform: uppercase;
 }
 
-.mini-confidence::before {
+.mini-confidence::before,
+.mini-uncertainty::before {
   border-radius: 50%;
   content: "";
   height: 6px;
@@ -423,6 +431,9 @@ select {
 .mini-confidence.high::before { background: #4d9b5f; }
 .mini-confidence.medium::before { background: var(--amber); }
 .mini-confidence.low::before { background: var(--red); }
+.mini-uncertainty.narrow::before { background: #4d9b5f; }
+.mini-uncertainty.moderate::before { background: var(--amber); }
+.mini-uncertainty.wide::before { background: var(--red); }
 
 .queue-qty {
   font-size: 12px;
@@ -673,6 +684,39 @@ select {
   color: var(--red);
 }
 
+.signal-pills,
+.table-signals {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.uncertainty-pill {
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 8px;
+  font-weight: 900;
+  padding: 6px 9px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.uncertainty-pill.narrow {
+  background: #e3f4e5;
+  color: #28713b;
+}
+
+.uncertainty-pill.moderate {
+  background: var(--amber-soft);
+  color: #8d5d13;
+}
+
+.uncertainty-pill.wide {
+  background: var(--red-soft);
+  color: var(--red);
+}
+
 .quantity-hero {
   align-items: flex-end;
   border-bottom: 1px solid var(--line);
@@ -717,7 +761,7 @@ select {
   margin-top: 3px;
 }
 
-.confidence-track {
+.match-confidence-track {
   background: var(--line);
   border-radius: 999px;
   height: 5px;
@@ -725,7 +769,7 @@ select {
   overflow: hidden;
 }
 
-.confidence-track span {
+.match-confidence-track span {
   background: linear-gradient(90deg, var(--forest), var(--lime));
   border-radius: inherit;
   display: block;
@@ -1371,6 +1415,10 @@ select {
   display: flex;
   gap: 10px;
   min-width: 180px;
+}
+
+.table-signals {
+  align-items: flex-start;
 }
 
 .table-product .table-image {

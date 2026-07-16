@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import dataJson from "./generated-data.json";
 
 type Confidence = "High" | "Medium" | "Low";
+type DemandUncertainty = "Narrow" | "Moderate" | "Wide";
 type Tab = "compare" | "portfolio" | "method";
 
 type HistoricalItem = {
@@ -63,6 +64,9 @@ type UpcomingItem = {
     low: number;
     high: number;
     confidence: Confidence;
+    matchConfidence: Confidence;
+    demandUncertainty: DemandUncertainty;
+    uncertaintyRatio: number;
     analogueQuantity: number;
     regressionQuantity: number;
     intervalHalfWidth: number;
@@ -82,6 +86,8 @@ type Dataset = {
     upcomingImageCoverage: number;
     missingUpcomingImages: string[];
     confidenceCounts: Record<Confidence, number>;
+    matchConfidenceCounts: Record<Confidence, number>;
+    demandUncertaintyCounts: Record<DemandUncertainty, number>;
     visualMethod: string;
     visionModel: {
       modelId: string;
@@ -132,7 +138,9 @@ type Decision = {
   quantity: number;
   low: number;
   high: number;
-  confidence: Confidence;
+  matchConfidence: Confidence;
+  demandUncertainty: DemandUncertainty;
+  uncertaintyRatio: number;
   analogueQuantity: number;
   regressionQuantity: number;
   intervalHalfWidth: number;
@@ -224,18 +232,40 @@ function makeDecision(
     const historical = historyById.get(match.historicalId);
     return sum + (historical?.qualityFlags.length ?? 0);
   }, 0);
-  const relativeWidth = intervalHalfWidth / Math.max(quantity, 1);
-  let confidence: Confidence = "Low";
+  const uncertaintyRatio = intervalHalfWidth / Math.max(quantity, 1);
+  let matchConfidence: Confidence = "Low";
   if (
     topScore >= 0.84 &&
     averageTop >= 0.72 &&
-    relativeWidth <= 0.5 &&
     top[0]?.visualScore !== null &&
     issueCount === 0
   ) {
-    confidence = "High";
-  } else if (topScore >= 0.62 && averageTop >= 0.52 && relativeWidth <= 0.9) {
-    confidence = "Medium";
+    matchConfidence = "High";
+  } else if (topScore >= 0.62 && averageTop >= 0.52) {
+    matchConfidence = "Medium";
+  }
+  const demandUncertainty: DemandUncertainty =
+    uncertaintyRatio <= 0.20 ? "Narrow" :
+      uncertaintyRatio <= 0.40 ? "Moderate" : "Wide";
+  const usesValidatedDefault =
+    attributeWeight === Math.round(dataset.meta.model.attributeWeight * 100) &&
+    visualWeight === Math.round(dataset.meta.model.visualWeight * 100) &&
+    targetSellThrough === Math.round(dataset.meta.model.targetSellThrough * 100) &&
+    topK === dataset.meta.model.topK;
+
+  if (usesValidatedDefault) {
+    return {
+      ranked,
+      quantity: item.recommendation.quantity,
+      low: item.recommendation.low,
+      high: item.recommendation.high,
+      matchConfidence: item.recommendation.matchConfidence,
+      demandUncertainty: item.recommendation.demandUncertainty,
+      uncertaintyRatio: item.recommendation.uncertaintyRatio,
+      analogueQuantity: item.recommendation.analogueQuantity,
+      regressionQuantity: item.recommendation.regressionQuantity,
+      intervalHalfWidth: item.recommendation.intervalHalfWidth,
+    };
   }
 
   return {
@@ -243,7 +273,9 @@ function makeDecision(
     quantity,
     low: clamp(roundPack(quantity - intervalHalfWidth), 100, 2000),
     high: clamp(roundPack(quantity + intervalHalfWidth), 100, 2000),
-    confidence,
+    matchConfidence,
+    demandUncertainty,
+    uncertaintyRatio,
     analogueQuantity: roundPack(analogueQuantity),
     regressionQuantity: roundPack(regressionQuantity),
     intervalHalfWidth: roundPack(intervalHalfWidth),
@@ -287,8 +319,12 @@ function ProductImage({
   );
 }
 
-function ConfidencePill({ confidence }: { confidence: Confidence }) {
-  return <span className={`confidence-pill ${confidence.toLowerCase()}`}>{confidence} confidence</span>;
+function MatchConfidencePill({ confidence }: { confidence: Confidence }) {
+  return <span className={`confidence-pill ${confidence.toLowerCase()}`}>{confidence} match</span>;
+}
+
+function UncertaintyPill({ uncertainty }: { uncertainty: DemandUncertainty }) {
+  return <span className={`uncertainty-pill ${uncertainty.toLowerCase()}`}>{uncertainty} uncertainty</span>;
 }
 
 function ScoreRing({ score, label }: { score: number; label: string }) {
@@ -317,13 +353,14 @@ function bestReasons(match: RankedMatch) {
 
 function App() {
   const initialItem = dataset.upcoming.find(
-    (item) => item.recommendation.confidence === "High" && item.imageUrl,
+    (item) => item.recommendation.matchConfidence === "High" && item.imageUrl,
   ) ?? dataset.upcoming[0];
   const [tab, setTab] = useState<Tab>("compare");
   const [selectedId, setSelectedId] = useState(initialItem.id);
   const [queueSearch, setQueueSearch] = useState("");
   const [segment, setSegment] = useState("All");
-  const [confidenceFilter, setConfidenceFilter] = useState("All");
+  const [matchConfidenceFilter, setMatchConfidenceFilter] = useState("All");
+  const [uncertaintyFilter, setUncertaintyFilter] = useState("All");
   const [attributeWeight, setAttributeWeight] = useState(Math.round(dataset.meta.model.attributeWeight * 100));
   const [visualWeight, setVisualWeight] = useState(Math.round(dataset.meta.model.visualWeight * 100));
   const [targetSellThrough, setTargetSellThrough] = useState(Math.round(dataset.meta.model.targetSellThrough * 100));
@@ -363,10 +400,11 @@ function App() {
       return (
         (!query || searchable.includes(query)) &&
         (segment === "All" || item.itemType === segment) &&
-        (confidenceFilter === "All" || itemDecision.confidence === confidenceFilter)
+        (matchConfidenceFilter === "All" || itemDecision.matchConfidence === matchConfidenceFilter) &&
+        (uncertaintyFilter === "All" || itemDecision.demandUncertainty === uncertaintyFilter)
       );
     });
-  }, [portfolio, queueSearch, segment, confidenceFilter]);
+  }, [portfolio, queueSearch, segment, matchConfidenceFilter, uncertaintyFilter]);
 
   const focusedMatch =
     selectedMatches.find((match) => match.historicalId === focusedHistoricalId) ??
@@ -413,7 +451,9 @@ function App() {
         "Combined similarity",
         "Attribute similarity",
         "FashionCLIP similarity",
-        "Confidence",
+        "Match confidence",
+        "Demand uncertainty",
+        "Uncertainty half-width percentage",
         "Analogue model quantity",
         "Regularized model quantity",
         "Recommended quantity",
@@ -433,7 +473,9 @@ function App() {
           Math.round((top?.combinedScore ?? 0) * 100),
           Math.round((top?.attributeScore ?? 0) * 100),
           top?.visualScore === null ? "" : Math.round((top?.visualScore ?? 0) * 100),
-          itemDecision.confidence,
+          itemDecision.matchConfidence,
+          itemDecision.demandUncertainty,
+          Math.round(itemDecision.uncertaintyRatio * 100),
           itemDecision.analogueQuantity,
           itemDecision.regressionQuantity,
           itemDecision.quantity,
@@ -508,11 +550,17 @@ function App() {
                 <option>OTSH</option>
                 <option>OTTS</option>
               </select>
-              <select value={confidenceFilter} onChange={(event) => setConfidenceFilter(event.target.value)} aria-label="Filter confidence">
-                <option>All</option>
-                <option>High</option>
-                <option>Medium</option>
-                <option>Low</option>
+              <select value={matchConfidenceFilter} onChange={(event) => setMatchConfidenceFilter(event.target.value)} aria-label="Filter match confidence">
+                <option value="All">All matches</option>
+                <option value="High">High match</option>
+                <option value="Medium">Medium match</option>
+                <option value="Low">Low match</option>
+              </select>
+              <select value={uncertaintyFilter} onChange={(event) => setUncertaintyFilter(event.target.value)} aria-label="Filter demand uncertainty">
+                <option value="All">All ranges</option>
+                <option value="Narrow">Narrow range</option>
+                <option value="Moderate">Moderate range</option>
+                <option value="Wide">Wide range</option>
               </select>
             </div>
             <div className="queue-list">
@@ -529,8 +577,13 @@ function App() {
                   <span className="queue-copy">
                     <strong>{item.id}</strong>
                     <small>{item.pattern} · {item.colour}</small>
-                    <span className={`mini-confidence ${itemDecision.confidence.toLowerCase()}`}>
-                      {itemDecision.confidence}
+                    <span className="mini-signals">
+                      <span className={`mini-confidence ${itemDecision.matchConfidence.toLowerCase()}`}>
+                        {itemDecision.matchConfidence} match
+                      </span>
+                      <span className={`mini-uncertainty ${itemDecision.demandUncertainty.toLowerCase()}`}>
+                        {itemDecision.demandUncertainty} range
+                      </span>
                     </span>
                   </span>
                   <span className="queue-qty">{numberFormatter.format(itemDecision.quantity)}<small>units</small></span>
@@ -582,22 +635,25 @@ function App() {
                     <span className="card-label">AI buy recommendation</span>
                     <p>FashionCLIP retrieval + scikit-learn demand model</p>
                   </div>
-                  <ConfidencePill confidence={decision.confidence} />
+                  <div className="signal-pills">
+                    <MatchConfidencePill confidence={decision.matchConfidence} />
+                    <UncertaintyPill uncertainty={decision.demandUncertainty} />
+                  </div>
                 </div>
                 <div className="quantity-hero">
                   <div>
                     <strong>{numberFormatter.format(finalQuantity)}</strong>
                     <span>units</span>
                   </div>
-                  <p>Suggested range <b>{numberFormatter.format(decision.low)}–{numberFormatter.format(decision.high)}</b></p>
+                  <p>80% expected demand range <b>{numberFormatter.format(decision.low)}–{numberFormatter.format(decision.high)}</b></p>
                 </div>
-                <div className="confidence-track">
+                <div className="match-confidence-track" aria-label={`Top historical match score ${scorePercent(decision.ranked[0]?.combinedScore ?? 0)}`}>
                   <span style={{ width: `${Math.round((decision.ranked[0]?.combinedScore ?? 0) * 100)}%` }} />
                 </div>
                 <div className="rationale-box">
                   <span className="rationale-icon">✦</span>
                   <p>
-                    <b>{topK} neural and attribute analogues</b> are blended with a scikit-learn Ridge model. The range is calibrated from out-of-fold errors, not a fixed percentage.
+                    <b>{decision.matchConfidence} match confidence</b> describes analogue relevance. <b>{decision.demandUncertainty.toLowerCase()} demand uncertainty</b> comes from the out-of-fold forecast-error range; the two signals are intentionally separate.
                   </p>
                 </div>
                 <div className="recommendation-metrics">
@@ -744,7 +800,7 @@ function App() {
       {tab === "portfolio" && (
         <section className="portfolio-page page-wrap">
           <div className="page-heading">
-            <div><span className="eyebrow">Upcoming assortment</span><h1>Portfolio recommendation</h1><p>Review confidence, analogues and buy quantities across the full sample.</p></div>
+            <div><span className="eyebrow">Upcoming assortment</span><h1>Portfolio recommendation</h1><p>Review analogue match confidence, demand uncertainty and buy quantities across the full sample.</p></div>
             <button className="button primary" onClick={exportCsv}>Export recommendation file</button>
           </div>
           <div className="kpi-grid">
@@ -756,12 +812,13 @@ function App() {
           <div className="portfolio-toolbar">
             <label className="search-box wide"><span>⌕</span><input value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} placeholder="Search item, pattern, colour or fabric" /></label>
             <select value={segment} onChange={(event) => setSegment(event.target.value)}><option>All</option><option>OTSH</option><option>OTTS</option></select>
-            <select value={confidenceFilter} onChange={(event) => setConfidenceFilter(event.target.value)}><option>All</option><option>High</option><option>Medium</option><option>Low</option></select>
+            <select value={matchConfidenceFilter} onChange={(event) => setMatchConfidenceFilter(event.target.value)} aria-label="Filter portfolio match confidence"><option value="All">All matches</option><option value="High">High match</option><option value="Medium">Medium match</option><option value="Low">Low match</option></select>
+            <select value={uncertaintyFilter} onChange={(event) => setUncertaintyFilter(event.target.value)} aria-label="Filter portfolio demand uncertainty"><option value="All">All ranges</option><option value="Narrow">Narrow range</option><option value="Moderate">Moderate range</option><option value="Wide">Wide range</option></select>
             <span>{queueItems.length} results</span>
           </div>
           <div className="portfolio-table-wrap">
             <table className="portfolio-table">
-              <thead><tr><th>Upcoming style</th><th>Product attributes</th><th>Top historical analogue</th><th>Match</th><th>Confidence</th><th>System buy</th><th>Planner buy</th><th /></tr></thead>
+              <thead><tr><th>Upcoming style</th><th>Product attributes</th><th>Top historical analogue</th><th>Match</th><th>Decision signals</th><th>System buy</th><th>Planner buy</th><th /></tr></thead>
               <tbody>
                 {queueItems.map(({ item, decision: itemDecision }) => {
                   const top = itemDecision.ranked[0];
@@ -772,7 +829,7 @@ function App() {
                       <td><strong>{item.pattern}</strong><small>{item.fit} · {item.fabric}</small></td>
                       <td>{historical && <div className="table-product"><ProductImage src={historical.imageUrl} alt={historical.id} className="table-image" /><span><strong>{historical.id}</strong><small>{historical.season} · ST {scorePercent(historical.sellThrough)}</small></span></div>}</td>
                       <td><strong className="match-score">{scorePercent(top?.combinedScore ?? 0)}</strong><small>Attr {scorePercent(top?.attributeScore ?? 0)} · Visual {scorePercent(top?.visualScore ?? 0)}</small></td>
-                      <td><ConfidencePill confidence={itemDecision.confidence} /></td>
+                      <td><div className="table-signals"><MatchConfidencePill confidence={itemDecision.matchConfidence} /><UncertaintyPill uncertainty={itemDecision.demandUncertainty} /></div></td>
                       <td><strong>{numberFormatter.format(itemDecision.quantity)}</strong><small>{numberFormatter.format(itemDecision.low)}–{numberFormatter.format(itemDecision.high)}</small></td>
                       <td><strong>{overrides[item.id] ? numberFormatter.format(overrides[item.id]) : "—"}</strong><small>{overrides[item.id] ? "Adjusted" : "Pending"}</small></td>
                       <td><button className="row-action" onClick={() => chooseItem(item.id)}>Review →</button></td>
@@ -797,7 +854,7 @@ function App() {
               ["02", "Encode products", "Create structured attribute evidence and 512-dimensional FashionCLIP embeddings from garment images."],
               ["03", "Learn retrieval", "Use scikit-learn ParameterGrid and LeaveOneOut to tune attribute/vision weights, neighbour count, blend, and regularization."],
               ["04", "Predict demand", "Ensemble similarity-weighted analogue demand with a fitted DictVectorizer, StandardScaler, and Ridge pipeline."],
-              ["05", "Quantify risk", "Generate a finite-sample conformal range, apply pack and quantity limits, and route uncertain buys to a planner."],
+              ["05", "Separate evidence and risk", "Report analogue match confidence independently from conformal demand uncertainty, then apply pack and quantity limits."],
             ].map(([number, title, copy]) => <article key={number}><span>{number}</span><h3>{title}</h3><p>{copy}</p></article>)}
           </div>
           <div className="method-columns">
@@ -809,6 +866,10 @@ function App() {
                 <strong>{attributeWeight}% × Attribute + {visualWeight}% × FashionCLIP</strong>
               </div>
               <div className="formula">
+                <p>Match confidence</p>
+                <strong>Top match strength + top-3 consistency + image availability + analogue data quality</strong>
+              </div>
+              <div className="formula">
                 <p>Historical demand target</p>
                 <strong>Sales ÷ {targetSellThrough}% sell-through, winsorized by available supply</strong>
               </div>
@@ -817,7 +878,11 @@ function App() {
                 <strong>{Math.round((1 - dataset.meta.model.regressionBlend) * 100)}% analogue AI + {Math.round(dataset.meta.model.regressionBlend * 100)}% scikit-learn Ridge</strong>
               </div>
               <div className="formula">
-                <p>Uncertainty</p>
+                <p>Demand uncertainty</p>
+                <strong>Narrow ≤ ±20% · Moderate ≤ ±40% · Wide &gt; ±40% of recommended buy</strong>
+              </div>
+              <div className="formula">
+                <p>Expected range</p>
                 <strong>80% conformal interval + 25-unit pack + 100–2,000 unit guardrails</strong>
               </div>
             </article>
@@ -838,6 +903,7 @@ function App() {
             <div><span>Visual representation</span><p>{dataset.meta.visionModel.modelId} · {dataset.meta.visionModel.embeddingDimension}D cosine · revision {dataset.meta.visionModel.modelRevision?.slice(0, 8) ?? "unknown"}</p><p>Fine-tuned FashionCLIP image/text service; client-specific tuning awaits reviewed pairs</p></div>
             <div><span>Retrieval</span><p>Precomputed attribute and FashionCLIP scoring against all 33 historical styles</p><p>Metadata-filtered pgvector HNSW top-200 retrieval, then top-10 re-ranking</p></div>
             <div><span>Quantity logic</span><p>Validation-tuned analogue + {dataset.meta.model.demandPipeline} scikit-learn pipeline</p><p>P10/P50/P90 LightGBM training and inference with MinTrace hierarchy reconciliation</p></div>
+            <div><span>Decision signals</span><p>Separate match confidence and demand uncertainty labels</p><p>Relevance calibration plus category-level temporal forecast uncertainty</p></div>
             <div><span>Uncertainty</span><p>Out-of-fold conformal quantity range</p><p>Temporal quantiles calibrated by category, channel and region</p></div>
             <div><span>Workflow</span><p>Browser-session planner override</p><p>Durable batch jobs, feedback capture, model registry and recommendation audit schema</p></div>
             <div><span>Data</span><p>33 historical / 167 upcoming samples</p><p>3–5 seasons plus inventory and markdown context</p></div>

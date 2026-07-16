@@ -2,11 +2,11 @@
 
 This directory contains two related runtimes:
 
-- a fitted v2.2 pilot that serves the local sample artifact; and
+- a fitted v2.3 pilot that serves the local sample artifact; and
 - a v3 scale architecture for PostgreSQL/pgvector retrieval, learned ranking,
   quantile demand forecasting, constrained ordering, jobs and feedback.
 
-The v2.2 pilot is active and reproducible. The v3 software path is implemented,
+The v2.3 pilot is active and reproducible. The v3 software path is implemented,
 but production model artifacts and a populated client catalogue are not present.
 
 ## Status at a glance
@@ -31,7 +31,7 @@ but production model artifacts and a populated client catalogue are not present.
 
 | Field | Value |
 |---|---|
-| Model version | 2.2.0 |
+| Model version | 2.3.0 |
 | Training outcomes | 33 historical items |
 | Upcoming catalogue | 167 items |
 | Image coverage | 33/33 historical; 164/167 upcoming |
@@ -87,8 +87,17 @@ validation before production.
   the regularized multivariate baseline. Preprocessing and fitting occur inside
   every validation fold; there is no handwritten matrix inversion.
 - Absolute out-of-fold residuals produce a finite-sample conformal interval.
-- Similarity, uncertainty and historical data-quality issues determine the
-  confidence label.
+- Match confidence describes analogue evidence only. High requires top similarity
+  at least 84%, mean top-three similarity at least 72%, visual evidence and no
+  analogue data-quality issues; medium requires 62% and 52%, respectively.
+- Demand uncertainty is a separate range-width signal. The conformal half-width
+  divided by the recommended buy is narrow at 20% or less, moderate through 40%,
+  and wide above 40%.
+
+This separation prevents a strong product match from being mislabeled as a weak
+match simply because the demand model has limited history. In the current sample,
+27 items have high match confidence, while 162 of 167 items retain wide demand
+uncertainty because the fitted conformal half-width is 325 units.
 
 The interface can change similarity weights, target sell-through and analogue
 count for scenario analysis. Those controls do not refit the model or recompute
@@ -231,6 +240,6 @@ From the repository root:
 .venv/bin/python -m pytest -q ml-service/tests
 ```
 
-The current suite has 11 tests covering pilot model behavior, the scikit-learn
+The current suite has 12 tests covering pilot model behavior, the scikit-learn
 pipeline, artifact contract, vector validation, ranking, quantiles, optimization
 and MinTrace coherence.
