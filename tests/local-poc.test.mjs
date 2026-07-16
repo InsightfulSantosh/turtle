@@ -40,6 +40,8 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.match(pageSource, /all \{Object\.keys\(focusedMatch\.attributeBreakdown\)\.length\} attribute scores/);
   assert.match(stylesSource, /\.match-reasons\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
   assert.match(stylesSource, /\.match-reasons span\s*\{[^}]*border-radius:\s*7px/s);
+  assert.match(stylesSource, /\.hero-product-image\s*\{[^}]*object-fit:\s*contain/s);
+  assert.match(stylesSource, /\.match-image\s*\{[^}]*height:\s*320px[^}]*object-fit:\s*contain/s);
   assert.match(stylesSource, /\.recommendation-metrics\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
   assert.match(stylesSource, /\.recommendation-metrics small,[^}]*overflow-wrap:\s*anywhere/s);
 });

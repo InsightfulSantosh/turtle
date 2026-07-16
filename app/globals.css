@@ -589,12 +589,12 @@ select {
 }
 
 .hero-product-image {
-  background: #ebe5da;
+  background: linear-gradient(135deg, #eee9df, #e6dfd4);
   border-radius: 13px;
   height: 350px;
   margin-top: 12px;
-  object-fit: cover;
-  object-position: center 27%;
+  object-fit: contain;
+  object-position: center;
   width: 100%;
 }
 
@@ -1119,10 +1119,10 @@ select {
 }
 
 .match-image {
-  background: #ebe5da;
-  height: 185px;
-  object-fit: cover;
-  object-position: center 25%;
+  background: linear-gradient(135deg, #eee9df, #e6dfd4);
+  height: 320px;
+  object-fit: contain;
+  object-position: center;
   width: 100%;
 }
 
@@ -2102,7 +2102,7 @@ select {
   }
 
   .match-image {
-    height: 280px;
+    height: min(86vw, 520px);
   }
 
   .attribute-evidence {
