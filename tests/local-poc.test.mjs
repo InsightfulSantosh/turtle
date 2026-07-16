@@ -37,7 +37,11 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.match(pageSource, /Strong attribute matches/);
   assert.match(pageSource, /matchDriverSummary/);
   assert.match(pageSource, /more shown in detailed evidence/);
-  assert.match(pageSource, /all \{Object\.keys\(focusedMatch\.attributeBreakdown\)\.length\} attribute scores/);
+  assert.match(pageSource, /All \{Object\.keys\(focusedMatch\.attributeBreakdown\)\.length\} upcoming and historical attribute values/);
+  assert.match(pageSource, /attributeValueReaders/);
+  assert.match(pageSource, /Exact match/);
+  assert.match(pageSource, /Upcoming/);
+  assert.match(pageSource, /Historical/);
   assert.match(stylesSource, /\.match-reasons\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
   assert.match(stylesSource, /\.match-reasons span\s*\{[^}]*border-radius:\s*7px/s);
   assert.match(stylesSource, /\.hero-product-image\s*\{[^}]*object-fit:\s*contain/s);

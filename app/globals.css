@@ -1214,7 +1214,8 @@ select {
   color: var(--forest-2);
   font-size: 7px;
   font-weight: 900;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .match-driver-summary {
@@ -1344,35 +1345,104 @@ select {
 
 .attribute-evidence {
   display: grid;
-  gap: 8px 14px;
-  grid-template-columns: repeat(2, 1fr);
+  gap: 9px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
-.attribute-evidence > div {
+.attribute-comparison {
+  background: #f4f5f0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  min-width: 0;
+  padding: 9px;
+}
+
+.attribute-comparison-heading {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.attribute-comparison-heading > span {
+  color: var(--ink-soft);
+  font-size: 8px;
+  font-weight: 900;
+}
+
+.attribute-match-status {
+  align-items: center;
+  border-radius: 999px;
+  display: flex;
+  font-size: 7px;
+  font-weight: 900;
+  gap: 4px;
+  padding: 3px 6px;
+}
+
+.attribute-match-status small {
+  font-size: inherit;
+  opacity: 0.72;
+}
+
+.attribute-match-status.exact {
+  background: #dcecdf;
+  color: #275f3c;
+}
+
+.attribute-match-status.related {
+  background: #e9efcf;
+  color: #596b16;
+}
+
+.attribute-match-status.partial {
+  background: #f4e8c9;
+  color: #765a12;
+}
+
+.attribute-match-status.different {
+  background: #f3deda;
+  color: #8d3f35;
+}
+
+.attribute-value-pair {
   align-items: center;
   display: grid;
-  gap: 7px;
-  grid-template-columns: 62px 1fr 30px;
+  gap: 6px;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  margin-top: 7px;
 }
 
-.attribute-evidence span,
-.attribute-evidence strong {
-  color: var(--muted);
-  font-size: 8px;
-  font-weight: 800;
+.attribute-value-pair > span {
+  min-width: 0;
 }
 
-.attribute-evidence > div > i {
-  background: var(--line);
-  border-radius: 999px;
-  height: 4px;
-  overflow: hidden;
-}
-
-.attribute-evidence b {
-  background: var(--forest-2);
+.attribute-value-pair small,
+.attribute-value-pair b {
   display: block;
-  height: 100%;
+}
+
+.attribute-value-pair small {
+  color: var(--muted);
+  font-size: 6px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  margin-bottom: 2px;
+  text-transform: uppercase;
+}
+
+.attribute-value-pair b {
+  color: var(--ink);
+  font-size: 8px;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.attribute-value-pair i {
+  color: var(--forest-2);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
 }
 
 .page-wrap {

@@ -76,6 +76,11 @@ type UpcomingItem = {
   modelFlags: string[];
 };
 
+type ComparableProduct = Pick<UpcomingItem,
+  "itemType" | "sleeve" | "provision" | "pattern" | "range" |
+  "fit" | "fabric" | "fashion" | "colour" | "mrp"
+>;
+
 type Dataset = {
   meta: {
     title: string;
@@ -155,6 +160,19 @@ const moneyFormatter = new Intl.NumberFormat("en-IN", {
   maximumFractionDigits: 0,
 });
 
+const attributeValueReaders: Record<string, (item: ComparableProduct) => string> = {
+  category: (item) => item.itemType,
+  sleeve: (item) => item.sleeve,
+  provision: (item) => item.provision,
+  pattern: (item) => item.pattern,
+  range: (item) => item.range,
+  fit: (item) => item.fit,
+  fabric: (item) => item.fabric,
+  fashion: (item) => item.fashion,
+  colour: (item) => item.colour,
+  price: (item) => moneyFormatter.format(item.mrp),
+};
+
 const attributeLabels: Record<string, string> = {
   category: "Category",
   sleeve: "Sleeve",
@@ -180,6 +198,24 @@ const attributeDriverPriority = [
   "provision",
   "category",
 ];
+
+function attributeValue(item: ComparableProduct, key: string) {
+  return attributeValueReaders[key]?.(item) || "Not provided";
+}
+
+function attributeMatchLabel(score: number) {
+  if (score >= 0.995) return "Exact match";
+  if (score >= 0.62) return "Related match";
+  if (score > 0) return "Partial match";
+  return "Different";
+}
+
+function attributeMatchTone(score: number) {
+  if (score >= 0.995) return "exact";
+  if (score >= 0.62) return "related";
+  if (score > 0) return "partial";
+  return "different";
+}
 
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.max(minimum, Math.min(maximum, value));
@@ -809,12 +845,19 @@ function App() {
                             className="match-reasons"
                             aria-label={`${driverSummary.total} strong attribute matches. Select this analogue to inspect every attribute score.`}
                           >
-                            {driverSummary.visible.map(({ key, label, score }) => (
-                              <span key={key} title={`${label}: ${scorePercent(score)}`}>
-                                <b>{label}</b>
-                                <strong>{scorePercent(score)}</strong>
-                              </span>
-                            ))}
+                            {driverSummary.visible.map(({ key, label, score }) => {
+                              const upcomingValue = attributeValue(selected, key);
+                              const historicalValue = attributeValue(historical, key);
+                              return (
+                                <span
+                                  key={key}
+                                  title={`${label}: ${upcomingValue} → ${historicalValue} (${scorePercent(score)})`}
+                                >
+                                  <b>{label}</b>
+                                  <strong>{historicalValue}</strong>
+                                </span>
+                              );
+                            })}
                           </div>
                           {driverSummary.remaining > 0 && (
                             <small className="match-driver-more">+{driverSummary.remaining} more shown in detailed evidence</small>
@@ -836,7 +879,7 @@ function App() {
                 <div className="evidence-intro">
                   <span className="eyebrow">Match evidence</span>
                   <h2>{selected.id} ↔ {focusedHistory.id}</h2>
-                  <p>Each card highlights four strong matches; all {Object.keys(focusedMatch.attributeBreakdown).length} attribute scores are shown here. Select any of the {topK} included analogues above to inspect its complete evidence.</p>
+                  <p>Each card highlights four matched values. All {Object.keys(focusedMatch.attributeBreakdown).length} upcoming and historical attribute values are compared here, with the percentage retained as supporting evidence.</p>
                 </div>
                 <div className="evidence-scores">
                   <ScoreRing score={focusedMatch.combinedScore} label="Combined" />
@@ -844,13 +887,25 @@ function App() {
                   <ScoreRing score={focusedMatch.visualScore ?? 0} label="FashionCLIP" />
                 </div>
                 <div className="attribute-evidence">
-                  {Object.entries(focusedMatch.attributeBreakdown).map(([key, value]) => (
-                    <div key={key}>
-                      <span>{attributeLabels[key] ?? key}</span>
-                      <i><b style={{ width: `${value * 100}%` }} /></i>
-                      <strong>{scorePercent(value)}</strong>
-                    </div>
-                  ))}
+                  {Object.entries(focusedMatch.attributeBreakdown).map(([key, value]) => {
+                    const upcomingValue = attributeValue(selected, key);
+                    const historicalValue = attributeValue(focusedHistory, key);
+                    return (
+                      <div className="attribute-comparison" key={key}>
+                        <div className="attribute-comparison-heading">
+                          <span>{attributeLabels[key] ?? key}</span>
+                          <strong className={`attribute-match-status ${attributeMatchTone(value)}`}>
+                            {attributeMatchLabel(value)} <small>{scorePercent(value)}</small>
+                          </strong>
+                        </div>
+                        <div className="attribute-value-pair">
+                          <span title={upcomingValue}><small>Upcoming</small><b>{upcomingValue}</b></span>
+                          <i aria-hidden="true">→</i>
+                          <span title={historicalValue}><small>Historical</small><b>{historicalValue}</b></span>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </section>
             )}
