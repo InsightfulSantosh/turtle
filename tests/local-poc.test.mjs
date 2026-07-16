@@ -99,7 +99,7 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.match(stylesSource, /\.evidence-header\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) 230px/s);
   assert.match(stylesSource, /\.evidence-product-pair\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) 28px minmax\(0, 1fr\)/s);
   assert.match(stylesSource, /\.attribute-evidence\s*\{[^}]*grid-template-columns:\s*repeat\(3,/s);
-  assert.match(stylesSource, /\.hero-product-image\s*\{[^}]*aspect-ratio:\s*auto 3 \/ 4[^}]*border-radius:\s*13px[^}]*height:\s*auto[^}]*margin:\s*12px auto 0[^}]*max-width:\s*100%[^}]*object-fit:\s*contain[^}]*object-position:\s*center[^}]*width:\s*100%/s);
+  assert.match(stylesSource, /\.hero-product-image\s*\{[^}]*aspect-ratio:\s*auto 3 \/ 4[^}]*border-radius:\s*0[^}]*height:\s*auto[^}]*margin:\s*12px -15px 0[^}]*max-width:\s*none[^}]*object-fit:\s*contain[^}]*object-position:\s*center[^}]*width:\s*calc\(100% \+ 30px\)/s);
   assert.match(stylesSource, /\.image-fallback\.hero-product-image\s*\{[^}]*aspect-ratio:\s*3 \/ 4/s);
   assert.match(stylesSource, /\.match-image\s*\{[^}]*aspect-ratio:\s*5 \/ 6[^}]*height:\s*auto[^}]*object-fit:\s*contain/s);
   assert.match(stylesSource, /\.image-fallback\.match-image\s*\{[^}]*aspect-ratio:\s*5 \/ 6/s);
