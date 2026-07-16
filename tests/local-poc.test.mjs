@@ -72,9 +72,10 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.doesNotMatch(pageSource, /View all product details/);
   assert.match(pageSource, /queue-commercial/);
   assert.match(stylesSource, /\.catalog-attribute-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
+  assert.match(stylesSource, /\.match-grid\.match-grid-3\s*\{[^}]*repeat\(3,\s*max\(200px,\s*calc\(\(100% - 36px\) \/ 4\)\)\)/s);
   assert.match(stylesSource, /\.match-grid\.match-grid-5\s*\{[^}]*repeat\(5,\s*max\(200px,\s*calc\(\(100% - 36px\) \/ 4\)\)\)/s);
   assert.match(stylesSource, /\.match-grid\.match-grid-8\s*\{[^}]*repeat\(8,\s*max\(200px,\s*calc\(\(100% - 36px\) \/ 4\)\)\)/s);
-  assert.match(stylesSource, /\.match-grid\.match-grid-5,\s*\.match-grid\.match-grid-8\s*\{[^}]*column-gap:\s*12px[^}]*overflow-x:\s*auto[^}]*padding:\s*0 12px 6px/s);
+  assert.match(stylesSource, /\.match-grid\.match-grid-3,\s*\.match-grid\.match-grid-5,\s*\.match-grid\.match-grid-8\s*\{[^}]*column-gap:\s*12px[^}]*overflow-x:\s*auto[^}]*padding:\s*0 12px 6px/s);
   assert.match(stylesSource, /\.catalog-attribute-grid dd\s*\{[^}]*overflow-wrap:\s*break-word[^}]*word-break:\s*normal/s);
   assert.match(stylesSource, /\.catalog-attribute-toggle\s*\{[^}]*width:\s*auto/s);
   assert.match(stylesSource, /\.match-card-select\s*\{[^}]*width:\s*100%/s);

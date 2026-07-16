@@ -1158,9 +1158,8 @@ select {
   margin-top: 13px;
 }
 
-.match-grid-3 {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  max-width: 920px;
+.match-grid.match-grid-3 {
+  grid-template-columns: repeat(3, max(200px, calc((100% - 36px) / 4)));
 }
 
 .match-grid.match-grid-5 {
@@ -1171,6 +1170,7 @@ select {
   grid-template-columns: repeat(8, max(200px, calc((100% - 36px) / 4)));
 }
 
+.match-grid.match-grid-3,
 .match-grid.match-grid-5,
 .match-grid.match-grid-8 {
   column-gap: 12px;
