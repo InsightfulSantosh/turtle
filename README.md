@@ -5,8 +5,8 @@ products to relevant historical styles and recommending an initial order
 quantity. The repository also contains a production-oriented scale architecture
 for catalogues of approximately 200,000–500,000 items.
 
-The current POC is local-only. No website hosting is configured, and the running
-application does not call ChatGPT or the OpenAI API.
+The current POC runs locally with standard Next.js and does not require an
+external hosting or authentication platform.
 
 ## Current status
 
@@ -19,7 +19,6 @@ application does not call ChatGPT or the OpenAI API.
 | Order recommendation | Active as a pilot | Analogue demand blended with a scikit-learn Ridge pipeline and uncertainty guardrails |
 | Sample Python API | Implemented and tested | Versioned v1 model and recommendation endpoints use the fitted POC artifact |
 | Scale platform | Code implemented, not production-activated | Requires a populated pgvector catalogue and approved trained model artifacts |
-| External hosting | Not configured | Run at `http://localhost:3000` |
 
 ## Supplied data and active model artifact
 
@@ -179,7 +178,8 @@ Python model and scale components:
 .venv/bin/python -m pytest -q ml-service/tests
 ```
 
-The current suite contains 11 Python tests plus a rendered-HTML regression test.
+The current suite contains 11 Python tests plus a local frontend/model-contract
+test; `npm test` also performs a complete standard Next.js production build.
 
 ## Scale architecture status
 

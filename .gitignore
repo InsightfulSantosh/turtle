@@ -15,8 +15,6 @@
 
 # next.js
 /.next/
-/.vinext/
-/out/
 
 # misc
 .DS_Store
@@ -32,14 +30,9 @@ yarn-error.log*
 .env*
 !ml-service/.env.scale.example
 
-# vercel
-.vercel
-
 # typescript
 next-env.d.ts
 *.tsbuildinfo
-/dist/
-/.wrangler/
 /outputs/
 /work/
 /.venv/
