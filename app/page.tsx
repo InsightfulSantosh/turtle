@@ -220,18 +220,6 @@ const attributeLabels: Record<string, string> = {
   price: "Price band",
 };
 
-const attributeDriverPriority = [
-  "pattern",
-  "fabric",
-  "colour",
-  "lifecycle",
-  "fit",
-  "price",
-  "sleeve",
-  "provision",
-  "category",
-];
-
 function attributeValue(item: ComparableProduct, key: string) {
   return attributeValueReaders[key]?.(item) || "Not provided";
 }
@@ -443,22 +431,6 @@ function ScoreRing({ score, label }: { score: number; label: string }) {
       <small>{label}</small>
     </div>
   );
-}
-
-function matchDriverSummary(match: RankedMatch) {
-  const strongDrivers = Object.entries(match.attributeBreakdown)
-    .filter(([, value]) => value >= 0.62)
-    .sort(([leftKey, leftScore], [rightKey, rightScore]) => (
-      rightScore - leftScore
-      || attributeDriverPriority.indexOf(leftKey) - attributeDriverPriority.indexOf(rightKey)
-    ))
-    .map(([key, score]) => ({ key, score, label: attributeLabels[key] ?? key }));
-
-  return {
-    visible: strongDrivers.slice(0, 4),
-    remaining: Math.max(strongDrivers.length - 4, 0),
-    total: strongDrivers.length,
-  };
 }
 
 function App() {
@@ -885,7 +857,6 @@ function App() {
                 {selectedMatches.map((match, index) => {
                   const historical = historyById.get(match.historicalId);
                   if (!historical) return null;
-                  const driverSummary = matchDriverSummary(match);
                   return (
                     <button
                       key={match.historicalId}
@@ -901,32 +872,19 @@ function App() {
                           <span><i style={{ width: `${match.attributeScore * 100}%` }} /></span>
                           <span><i style={{ width: `${(match.visualScore ?? 0) * 100}%` }} /></span>
                         </div>
-                        <div className="match-driver-summary">
-                          <div className="match-driver-heading">
-                            <small>Strong attribute matches</small>
-                            <strong>{driverSummary.total}</strong>
+                        <div className="historical-catalog-summary">
+                          <div className="historical-catalog-heading">
+                            <small>Historical catalog details</small>
+                            <span>Select for match evidence →</span>
                           </div>
-                          <div
-                            className="match-reasons"
-                            aria-label={`${driverSummary.total} strong attribute matches. Select this analogue to inspect every attribute score.`}
-                          >
-                            {driverSummary.visible.map(({ key, label, score }) => {
-                              const upcomingValue = attributeValue(selected, key);
-                              const historicalValue = attributeValue(historical, key);
-                              return (
-                                <span
-                                  key={key}
-                                  title={`${label}: ${upcomingValue} → ${historicalValue} (${scorePercent(score)})`}
-                                >
-                                  <b>{label}</b>
-                                  <strong>{historicalValue}</strong>
-                                </span>
-                              );
-                            })}
-                          </div>
-                          {driverSummary.remaining > 0 && (
-                            <small className="match-driver-more">+{driverSummary.remaining} more shown in detailed evidence</small>
-                          )}
+                          <dl className="historical-spec-grid">
+                            <div><dt>Collection / fit</dt><dd>{historical.fit}</dd></div>
+                            <div><dt>Fabric</dt><dd>{historical.fabric}</dd></div>
+                            <div><dt>MRP</dt><dd>{moneyFormatter.format(historical.mrp)}</dd></div>
+                            <div><dt>Sleeve</dt><dd>{historical.sleeve}</dd></div>
+                            <div><dt>Fit code</dt><dd>{historical.provision}</dd></div>
+                            <div><dt>Lifecycle</dt><dd>{historical.lifecycle}</dd></div>
+                          </dl>
                         </div>
                         <div className="match-performance">
                           <span><small>Order</small>{numberFormatter.format(historical.order)}</span>
@@ -944,7 +902,7 @@ function App() {
                 <div className="evidence-intro">
                   <span className="eyebrow">Match evidence</span>
                   <h2>{selected.id} ↔ {focusedHistory.id}</h2>
-                  <p>Each card highlights four matched values. All {Object.keys(focusedMatch.attributeBreakdown).length} upcoming and historical attribute values are compared here, with the percentage retained as supporting evidence.</p>
+                  <p>Each card shows the historical catalog specifications used by planners. All {Object.keys(focusedMatch.attributeBreakdown).length} upcoming and historical comparison fields are scored here as supporting match evidence.</p>
                 </div>
                 <div className="evidence-scores">
                   <ScoreRing score={focusedMatch.combinedScore} label="Combined" />

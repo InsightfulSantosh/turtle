@@ -129,7 +129,8 @@ flags these issues and constrains their effect rather than silently trusting the
 - Expandable selected-style specification with catalog identifiers, all useful
   attributes and image-model readiness; constant range codes stay hidden
 - Side-by-side upcoming and historical product images
-- Ranked analogue cards with combined, attribute and FashionCLIP evidence
+- Ranked historical analogue cards with Collection/Fit, Fabric, MRP, Sleeve,
+  Fit code, Lifecycle, order and sell-through alongside the similarity evidence
 - Top 3, 5 or 8 analogue scenarios; every selected analogue is displayed and
   contributes to the calculation
 - Validated-default versus custom-scenario labels
