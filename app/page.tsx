@@ -423,7 +423,7 @@ function MatchAttributeCatalog({
           aria-expanded={expanded}
           onClick={() => setExpanded((current) => !current)}
         >
-          {expanded ? "Show 4 key attributes" : "View all 9 attributes"}
+          {expanded ? "Show key attributes" : "View all 9"}
         </button>
       </div>
       <dl className="catalog-attribute-grid">

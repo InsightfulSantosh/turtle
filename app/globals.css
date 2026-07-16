@@ -1164,11 +1164,20 @@ select {
 }
 
 .match-grid-5 {
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(5, minmax(220px, 1fr));
 }
 
 .match-grid-8 {
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(4, minmax(220px, 1fr));
+}
+
+.match-grid-5,
+.match-grid-8 {
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  padding-bottom: 6px;
+  scrollbar-color: var(--line-dark) transparent;
+  scrollbar-width: thin;
 }
 
 .match-card {
@@ -2211,10 +2220,16 @@ select {
   }
 
   .match-grid,
-  .match-grid-3,
-  .match-grid-5,
-  .match-grid-8 {
+  .match-grid-3 {
     grid-template-columns: repeat(3, 1fr);
+  }
+
+  .match-grid-5 {
+    grid-template-columns: repeat(5, minmax(220px, 1fr));
+  }
+
+  .match-grid-8 {
+    grid-template-columns: repeat(4, minmax(220px, 1fr));
   }
 
   .evidence-panel {

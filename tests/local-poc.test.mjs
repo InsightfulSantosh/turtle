@@ -47,8 +47,8 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.match(pageSource, /\$\{context\} product attributes/);
   assert.doesNotMatch(pageSource, /Upcoming match attributes/);
   assert.doesNotMatch(pageSource, /Historical match attributes/);
-  assert.match(pageSource, /View all 9 attributes/);
-  assert.match(pageSource, /Show 4 key attributes/);
+  assert.match(pageSource, /View all 9/);
+  assert.match(pageSource, /Show key attributes/);
   assert.doesNotMatch(pageSource, /\+5 Show all 9/);
   assert.doesNotMatch(pageSource, /4 of 9 shown/);
   assert.doesNotMatch(pageSource, /9 of 9 shown/);
@@ -72,8 +72,9 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.doesNotMatch(pageSource, /View all product details/);
   assert.match(pageSource, /queue-commercial/);
   assert.match(stylesSource, /\.catalog-attribute-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
-  assert.match(stylesSource, /\.match-grid-5\s*\{[^}]*repeat\(auto-fit,\s*minmax\(280px,/s);
-  assert.match(stylesSource, /\.match-grid-8\s*\{[^}]*repeat\(auto-fit,\s*minmax\(280px,/s);
+  assert.match(stylesSource, /\.match-grid-5\s*\{[^}]*repeat\(5,\s*minmax\(220px,/s);
+  assert.match(stylesSource, /\.match-grid-8\s*\{[^}]*repeat\(4,\s*minmax\(220px,/s);
+  assert.match(stylesSource, /\.match-grid-5,\s*\.match-grid-8\s*\{[^}]*overflow-x:\s*auto/s);
   assert.match(stylesSource, /\.catalog-attribute-grid dd\s*\{[^}]*overflow-wrap:\s*break-word[^}]*word-break:\s*normal/s);
   assert.match(stylesSource, /\.catalog-attribute-toggle\s*\{[^}]*width:\s*auto/s);
   assert.match(stylesSource, /\.match-card-select\s*\{[^}]*width:\s*100%/s);
