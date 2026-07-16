@@ -800,15 +800,25 @@ function App() {
                           <span><i style={{ width: `${match.attributeScore * 100}%` }} /></span>
                           <span><i style={{ width: `${(match.visualScore ?? 0) * 100}%` }} /></span>
                         </div>
-                        <small className="match-reasons-label">Top attribute drivers</small>
-                        <div
-                          className="match-reasons"
-                          aria-label={`${driverSummary.total} strong attribute matches. Select this analogue to inspect every attribute score.`}
-                        >
-                          {driverSummary.visible.map(({ key, label, score }) => (
-                            <span key={key} title={`${label}: ${scorePercent(score)}`}>{label} {scorePercent(score)}</span>
-                          ))}
-                          {driverSummary.remaining > 0 && <span className="more">+{driverSummary.remaining} more</span>}
+                        <div className="match-driver-summary">
+                          <div className="match-driver-heading">
+                            <small>Strong attribute matches</small>
+                            <strong>{driverSummary.total}</strong>
+                          </div>
+                          <div
+                            className="match-reasons"
+                            aria-label={`${driverSummary.total} strong attribute matches. Select this analogue to inspect every attribute score.`}
+                          >
+                            {driverSummary.visible.map(({ key, label, score }) => (
+                              <span key={key} title={`${label}: ${scorePercent(score)}`}>
+                                <b>{label}</b>
+                                <strong>{scorePercent(score)}</strong>
+                              </span>
+                            ))}
+                          </div>
+                          {driverSummary.remaining > 0 && (
+                            <small className="match-driver-more">+{driverSummary.remaining} more shown in detailed evidence</small>
+                          )}
                         </div>
                         <div className="match-performance">
                           <span><small>Order</small>{numberFormatter.format(historical.order)}</span>
@@ -826,7 +836,7 @@ function App() {
                 <div className="evidence-intro">
                   <span className="eyebrow">Match evidence</span>
                   <h2>{selected.id} ↔ {focusedHistory.id}</h2>
-                  <p>Each card summarizes four prioritized drivers; all {Object.keys(focusedMatch.attributeBreakdown).length} attribute scores are shown here. Select any of the {topK} included analogues above to inspect its complete evidence.</p>
+                  <p>Each card highlights four strong matches; all {Object.keys(focusedMatch.attributeBreakdown).length} attribute scores are shown here. Select any of the {topK} included analogues above to inspect its complete evidence.</p>
                 </div>
                 <div className="evidence-scores">
                   <ScoreRing score={focusedMatch.combinedScore} label="Combined" />
