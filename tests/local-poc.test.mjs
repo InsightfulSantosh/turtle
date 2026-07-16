@@ -72,9 +72,9 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.doesNotMatch(pageSource, /View all product details/);
   assert.match(pageSource, /queue-commercial/);
   assert.match(stylesSource, /\.catalog-attribute-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
-  assert.match(stylesSource, /\.match-grid-5\s*\{[^}]*repeat\(5,\s*minmax\(220px,/s);
-  assert.match(stylesSource, /\.match-grid-8\s*\{[^}]*repeat\(4,\s*minmax\(220px,/s);
-  assert.match(stylesSource, /\.match-grid-5,\s*\.match-grid-8\s*\{[^}]*overflow-x:\s*auto/s);
+  assert.match(stylesSource, /\.match-grid\.match-grid-5\s*\{[^}]*repeat\(5,\s*minmax\(210px,\s*calc\(\(100% - 30px\) \/ 4\)\)\)/s);
+  assert.match(stylesSource, /\.match-grid\.match-grid-8\s*\{[^}]*repeat\(8,\s*minmax\(210px,\s*calc\(\(100% - 30px\) \/ 4\)\)\)/s);
+  assert.match(stylesSource, /\.match-grid\.match-grid-5,\s*\.match-grid\.match-grid-8\s*\{[^}]*overflow-x:\s*auto/s);
   assert.match(stylesSource, /\.catalog-attribute-grid dd\s*\{[^}]*overflow-wrap:\s*break-word[^}]*word-break:\s*normal/s);
   assert.match(stylesSource, /\.catalog-attribute-toggle\s*\{[^}]*width:\s*auto/s);
   assert.match(stylesSource, /\.match-card-select\s*\{[^}]*width:\s*100%/s);
@@ -82,6 +82,7 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.doesNotMatch(stylesSource, /\.match-card \.catalog-attribute-grid > div:nth-child/);
   assert.match(stylesSource, /\.match-performance\s*\{[^}]*margin-top:\s*5px[^}]*padding-top:\s*5px/s);
   assert.match(stylesSource, /\.match-performance span\s*\{[^}]*font-size:\s*10px/s);
+  assert.match(stylesSource, /\.match-performance small\s*\{[^}]*white-space:\s*nowrap/s);
   assert.doesNotMatch(stylesSource, /\.match-card \.match-attribute-catalog-heading[^}]*font-size/s);
   assert.doesNotMatch(stylesSource, /\.match-card \.catalog-attribute-grid (?:dt|dd)\s*\{[^}]*font-size/s);
   assert.match(stylesSource, /\.match-card \.catalog-attribute-grid dd\s*\{[^}]*font-weight:\s*700[^}]*min-height:\s*0/s);
