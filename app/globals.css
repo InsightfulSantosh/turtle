@@ -1309,12 +1309,6 @@ select {
   padding: 8px;
 }
 
-.match-card .match-attribute-catalog-heading small,
-.match-card .match-attribute-catalog-heading span,
-.match-card .catalog-attribute-toggle {
-  font-size: 7px;
-}
-
 .match-card .catalog-attribute-grid {
   gap: 5px;
 }
@@ -1323,13 +1317,7 @@ select {
   padding: 7px;
 }
 
-.match-card .catalog-attribute-grid dt {
-  font-size: 6px;
-}
-
 .match-card .catalog-attribute-grid dd {
-  font-size: 7px;
-  font-weight: 900;
   min-height: 18px;
 }
 

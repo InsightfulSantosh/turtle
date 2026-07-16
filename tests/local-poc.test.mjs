@@ -71,6 +71,8 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.match(stylesSource, /\.catalog-attribute-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
   assert.match(stylesSource, /\.catalog-attribute-toggle\s*\{[^}]*width:\s*100%/s);
   assert.match(stylesSource, /\.match-card-select\s*\{[^}]*width:\s*100%/s);
+  assert.doesNotMatch(stylesSource, /\.match-card \.match-attribute-catalog-heading[^}]*font-size/s);
+  assert.doesNotMatch(stylesSource, /\.match-card \.catalog-attribute-grid (?:dt|dd)\s*\{[^}]*font-size/s);
   assert.match(stylesSource, /\.hero-product-image\s*\{[^}]*object-fit:\s*contain/s);
   assert.match(stylesSource, /\.match-image\s*\{[^}]*height:\s*320px[^}]*object-fit:\s*contain/s);
   assert.match(stylesSource, /\.recommendation-metrics\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
