@@ -417,7 +417,14 @@ function MatchAttributeCatalog({
     <section className="match-attribute-catalog" aria-label={`${context} product attributes`}>
       <div className="match-attribute-catalog-heading">
         <small>Product attributes</small>
-        <span>{expanded ? "9 of 9 shown" : "4 of 9 shown"}</span>
+        <button
+          type="button"
+          className="catalog-attribute-toggle"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((current) => !current)}
+        >
+          {expanded ? "Show 4 key attributes" : "View all 9 attributes"}
+        </button>
       </div>
       <dl className="catalog-attribute-grid">
         {visibleAttributes.map((key) => {
@@ -430,14 +437,6 @@ function MatchAttributeCatalog({
           );
         })}
       </dl>
-      <button
-        type="button"
-        className="catalog-attribute-toggle"
-        aria-expanded={expanded}
-        onClick={() => setExpanded((current) => !current)}
-      >
-        {expanded ? "Show 4 key attributes" : "View all 9 attributes"}
-      </button>
     </section>
   );
 }

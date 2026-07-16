@@ -50,8 +50,8 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.match(pageSource, /View all 9 attributes/);
   assert.match(pageSource, /Show 4 key attributes/);
   assert.doesNotMatch(pageSource, /\+5 Show all 9/);
-  assert.match(pageSource, /4 of 9 shown/);
-  assert.match(pageSource, /9 of 9 shown/);
+  assert.doesNotMatch(pageSource, /4 of 9 shown/);
+  assert.doesNotMatch(pageSource, /9 of 9 shown/);
   assert.match(pageSource, /match-card-select/);
   assert.match(pageSource, /Select \$\{historical\.id\} for match evidence/);
   assert.match(pageSource, /View match evidence/);
@@ -75,12 +75,12 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.match(stylesSource, /\.match-grid-5\s*\{[^}]*repeat\(auto-fit,\s*minmax\(280px,/s);
   assert.match(stylesSource, /\.match-grid-8\s*\{[^}]*repeat\(auto-fit,\s*minmax\(280px,/s);
   assert.match(stylesSource, /\.catalog-attribute-grid dd\s*\{[^}]*overflow-wrap:\s*break-word[^}]*word-break:\s*normal/s);
-  assert.match(stylesSource, /\.catalog-attribute-toggle\s*\{[^}]*width:\s*100%/s);
+  assert.match(stylesSource, /\.catalog-attribute-toggle\s*\{[^}]*width:\s*auto/s);
   assert.match(stylesSource, /\.match-card-select\s*\{[^}]*width:\s*100%/s);
   assert.doesNotMatch(stylesSource, /\.match-card \.match-attribute-catalog-heading[^}]*font-size/s);
   assert.doesNotMatch(stylesSource, /\.match-card \.catalog-attribute-grid (?:dt|dd)\s*\{[^}]*font-size/s);
   assert.match(stylesSource, /\.match-card \.catalog-attribute-grid dd\s*\{[^}]*font-weight:\s*700[^}]*min-height:\s*0/s);
-  assert.match(stylesSource, /\.match-card \.catalog-attribute-toggle\s*\{[^}]*min-height:\s*27px/s);
+  assert.match(stylesSource, /\.match-card \.catalog-attribute-toggle\s*\{[^}]*min-height:\s*22px/s);
   assert.match(stylesSource, /\.hero-product-image\s*\{[^}]*object-fit:\s*contain/s);
   assert.match(stylesSource, /\.match-image\s*\{[^}]*height:\s*320px[^}]*object-fit:\s*contain/s);
   assert.match(stylesSource, /\.recommendation-metrics\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
