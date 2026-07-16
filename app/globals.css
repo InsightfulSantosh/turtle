@@ -1164,18 +1164,19 @@ select {
 }
 
 .match-grid.match-grid-5 {
-  grid-template-columns: repeat(5, max(210px, calc((100% - 30px) / 4)));
+  grid-template-columns: repeat(5, max(200px, calc((100% - 36px) / 4)));
 }
 
 .match-grid.match-grid-8 {
-  grid-template-columns: repeat(8, max(210px, calc((100% - 30px) / 4)));
+  grid-template-columns: repeat(8, max(200px, calc((100% - 36px) / 4)));
 }
 
 .match-grid.match-grid-5,
 .match-grid.match-grid-8 {
+  column-gap: 12px;
   overflow-x: auto;
   overscroll-behavior-inline: contain;
-  padding-bottom: 6px;
+  padding: 0 12px 6px;
   scrollbar-color: var(--line-dark) transparent;
   scrollbar-width: thin;
 }
@@ -1236,7 +1237,7 @@ select {
 }
 
 .match-copy {
-  padding: 12px;
+  padding: 10px;
 }
 
 .match-title {
@@ -1276,7 +1277,7 @@ select {
 .dual-bars {
   display: grid;
   gap: 3px;
-  margin: 10px 0;
+  margin: 8px 0;
 }
 
 .dual-bars > span {
@@ -1297,7 +1298,7 @@ select {
 }
 
 .match-card-catalog {
-  padding: 0 8px 8px;
+  padding: 0 6px 6px;
 }
 
 .match-card .match-attribute-catalog {
