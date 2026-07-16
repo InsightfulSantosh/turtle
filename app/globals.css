@@ -705,7 +705,6 @@ select {
 .catalog-attribute-grid dd {
   display: block;
   margin: 0;
-  overflow-wrap: anywhere;
 }
 
 .catalog-attribute-grid dt {
@@ -713,6 +712,7 @@ select {
   font-size: 7px;
   font-weight: 800;
   letter-spacing: 0.06em;
+  white-space: nowrap;
   text-transform: uppercase;
 }
 
@@ -722,6 +722,8 @@ select {
   font-weight: 800;
   line-height: 1.35;
   margin-top: 3px;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .catalog-attribute-toggle {
@@ -1168,11 +1170,11 @@ select {
 }
 
 .match-grid-5 {
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
 .match-grid-8 {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
 }
 
 .match-card {
@@ -1238,7 +1240,8 @@ select {
 .match-title strong {
   font-size: 10px;
   line-height: 1.35;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
 }
 
 .match-title span,
