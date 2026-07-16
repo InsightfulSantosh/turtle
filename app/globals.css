@@ -1326,13 +1326,14 @@ select {
   border-top: 1px solid var(--line);
   display: grid;
   grid-template-columns: 1fr 1fr;
-  margin-top: 10px;
-  padding-top: 9px;
+  margin-top: 7px;
+  padding-top: 6px;
 }
 
 .match-performance span {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 900;
+  line-height: 1.2;
 }
 
 .match-performance span + span {
@@ -1342,7 +1343,8 @@ select {
 
 .match-performance small {
   display: block;
-  margin-bottom: 3px;
+  font-size: 7px;
+  margin-bottom: 1px;
 }
 
 .evidence-panel {
