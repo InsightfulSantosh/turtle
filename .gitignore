@@ -33,13 +33,8 @@ yarn-error.log*
 # typescript
 next-env.d.ts
 *.tsbuildinfo
-/outputs/
-/work/
 /.venv/
-/ml-service/artifacts/*.json
-/ml-service/artifacts/*.joblib
 /ml-service/.pytest_cache/
 /ml-service/**/__pycache__/
 /models/
-/model-cache/
 /.model-cache/
