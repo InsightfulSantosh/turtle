@@ -126,11 +126,12 @@ flags these issues and constrains their effect rather than silently trusting the
 
 - Upcoming product queue with image, pattern/colour, collection/fit, MRP,
   recommended buy, match-confidence and demand-uncertainty signals
-- Expandable selected-style specification with catalog identifiers, all useful
-  attributes and image-model readiness; constant range codes stay hidden
+- Consistent upcoming and historical match-attribute catalogs: Category,
+  Pattern, Collection and Fabric appear first; `+5 Show all 9` reveals Colour,
+  Sleeve, Fit code, Season family and Price band
 - Side-by-side upcoming and historical product images
-- Ranked historical analogue cards with Collection/Fit, Fabric, MRP, Sleeve,
-  Fit code, Lifecycle, order and sell-through alongside the similarity evidence
+- Ranked historical analogue cards with the same expandable nine attributes,
+  order and sell-through alongside the similarity evidence
 - Top 3, 5 or 8 analogue scenarios; every selected analogue is displayed and
   contributes to the calculation
 - Validated-default versus custom-scenario labels

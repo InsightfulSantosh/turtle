@@ -220,6 +220,18 @@ const attributeLabels: Record<string, string> = {
   price: "Price band",
 };
 
+const catalogAttributeOrder = [
+  "category",
+  "pattern",
+  "fit",
+  "fabric",
+  "colour",
+  "sleeve",
+  "provision",
+  "lifecycle",
+  "price",
+] as const;
+
 function attributeValue(item: ComparableProduct, key: string) {
   return attributeValueReaders[key]?.(item) || "Not provided";
 }
@@ -386,6 +398,47 @@ function ProductImage({
       referrerPolicy="no-referrer"
       onError={() => setFailedSrc(src ?? null)}
     />
+  );
+}
+
+function MatchAttributeCatalog({
+  product,
+  context,
+}: {
+  product: ComparableProduct;
+  context: "Upcoming" | "Historical";
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const visibleAttributes = expanded
+    ? catalogAttributeOrder
+    : catalogAttributeOrder.slice(0, 4);
+
+  return (
+    <section className="match-attribute-catalog" aria-label={`${context} match attributes`}>
+      <div className="match-attribute-catalog-heading">
+        <small>{context} match attributes</small>
+        <span>{expanded ? "9 of 9 shown" : "4 of 9 shown"}</span>
+      </div>
+      <dl className="catalog-attribute-grid">
+        {visibleAttributes.map((key) => {
+          const value = attributeValue(product, key);
+          return (
+            <div key={key}>
+              <dt>{attributeLabels[key]}</dt>
+              <dd title={value}>{value}</dd>
+            </div>
+          );
+        })}
+      </dl>
+      <button
+        type="button"
+        className="catalog-attribute-toggle"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((current) => !current)}
+      >
+        {expanded ? "Show 4 only" : "+5 Show all 9"}
+      </button>
+    </section>
   );
 }
 
@@ -707,40 +760,7 @@ function App() {
                   {!selected.imageUrl && <span className="warning-chip">Image missing</span>}
                 </div>
                 <ProductImage src={selected.imageUrl} alt={`Upcoming ${selected.id}`} className="hero-product-image" eager />
-                <div className="product-specs">
-                  <div><small>MRP</small><strong>{moneyFormatter.format(selected.mrp)}</strong></div>
-                  <div><small>Category</small><strong>{selected.itemType}</strong></div>
-                  <div><small>Sleeve</small><strong>{selected.sleeve}</strong></div>
-                  <div><small>Fit code</small><strong>{selected.provision}</strong></div>
-                  <div><small>Collection / fit</small><strong>{selected.fit}</strong></div>
-                  <div><small>Lifecycle</small><strong>{selected.lifecycle}</strong></div>
-                </div>
-                <details className="product-details">
-                  <summary>
-                    <span>View all product details</span>
-                    <small>Source catalog fields</small>
-                  </summary>
-                  <dl className="product-details-grid">
-                    <div><dt>Product category</dt><dd>{selected.itemType}</dd></div>
-                    <div><dt>Style number</dt><dd>{selected.style}</dd></div>
-                    <div><dt>Colour variant code</dt><dd>{selected.colourCode}</dd></div>
-                    <div><dt>Pattern</dt><dd>{selected.pattern}</dd></div>
-                    <div><dt>Collection / fit</dt><dd>{selected.fit}</dd></div>
-                    <div><dt>Fabric</dt><dd>{selected.fabric}</dd></div>
-                    <div><dt>Colour name</dt><dd>{selected.colour}</dd></div>
-                    <div><dt>Sleeve code</dt><dd>{selected.sleeve}</dd></div>
-                    <div><dt>Provision / fit code</dt><dd>{selected.provision}</dd></div>
-                    <div><dt>Lifecycle</dt><dd>{selected.lifecycle}</dd></div>
-                    {selected.fashion.trim().toUpperCase() !== "FASHION" && (
-                      <div><dt>Merch type</dt><dd>{selected.fashion}</dd></div>
-                    )}
-                    <div>
-                      <dt>Image status</dt>
-                      <dd>{selected.hasVisualFeature ? "FashionCLIP ready" : "Attribute-only match"}</dd>
-                    </div>
-                  </dl>
-                  <p>Constant range codes are intentionally hidden because they do not help distinguish products.</p>
-                </details>
+                <MatchAttributeCatalog key={selected.id} product={selected} context="Upcoming" />
               </article>
 
               <article className="recommendation-card">
@@ -858,40 +878,36 @@ function App() {
                   const historical = historyById.get(match.historicalId);
                   if (!historical) return null;
                   return (
-                    <button
+                    <article
                       key={match.historicalId}
                       className={`match-card ${focusedMatch?.historicalId === match.historicalId ? "active" : ""}`}
-                      onClick={() => setFocusedHistoricalId(match.historicalId)}
                     >
-                      <span className="rank">#{index + 1}</span>
-                      <ProductImage src={historical.imageUrl} alt={historical.id} className="match-image" />
-                      <div className="match-copy">
-                        <div className="match-title"><strong>{historical.id}</strong><span>{scorePercent(match.combinedScore)}</span></div>
-                        <small>{historical.season} · {historical.pattern} · {historical.colour}</small>
-                        <div className="dual-bars">
-                          <span><i style={{ width: `${match.attributeScore * 100}%` }} /></span>
-                          <span><i style={{ width: `${(match.visualScore ?? 0) * 100}%` }} /></span>
-                        </div>
-                        <div className="historical-catalog-summary">
-                          <div className="historical-catalog-heading">
-                            <small>Historical catalog details</small>
-                            <span>Select for match evidence →</span>
+                      <button
+                        type="button"
+                        className="match-card-select"
+                        aria-label={`Select ${historical.id} for match evidence`}
+                        onClick={() => setFocusedHistoricalId(match.historicalId)}
+                      >
+                        <span className="rank">#{index + 1}</span>
+                        <ProductImage src={historical.imageUrl} alt={historical.id} className="match-image" />
+                        <div className="match-copy">
+                          <div className="match-title"><strong>{historical.id}</strong><span>{scorePercent(match.combinedScore)}</span></div>
+                          <small>{historical.season} · {historical.pattern} · {historical.colour}</small>
+                          <div className="dual-bars">
+                            <span><i style={{ width: `${match.attributeScore * 100}%` }} /></span>
+                            <span><i style={{ width: `${(match.visualScore ?? 0) * 100}%` }} /></span>
                           </div>
-                          <dl className="historical-spec-grid">
-                            <div><dt>Collection / fit</dt><dd>{historical.fit}</dd></div>
-                            <div><dt>Fabric</dt><dd>{historical.fabric}</dd></div>
-                            <div><dt>MRP</dt><dd>{moneyFormatter.format(historical.mrp)}</dd></div>
-                            <div><dt>Sleeve</dt><dd>{historical.sleeve}</dd></div>
-                            <div><dt>Fit code</dt><dd>{historical.provision}</dd></div>
-                            <div><dt>Lifecycle</dt><dd>{historical.lifecycle}</dd></div>
-                          </dl>
+                          <span className="match-evidence-link">View match evidence <i aria-hidden="true">→</i></span>
                         </div>
+                      </button>
+                      <div className="match-card-catalog">
+                        <MatchAttributeCatalog product={historical} context="Historical" />
                         <div className="match-performance">
                           <span><small>Order</small>{numberFormatter.format(historical.order)}</span>
                           <span><small>Sell-through</small>{scorePercent(historical.sellThrough)}</span>
                         </div>
                       </div>
-                    </button>
+                    </article>
                   );
                 })}
               </div>
@@ -902,7 +918,7 @@ function App() {
                 <div className="evidence-intro">
                   <span className="eyebrow">Match evidence</span>
                   <h2>{selected.id} ↔ {focusedHistory.id}</h2>
-                  <p>Each card shows the historical catalog specifications used by planners. All {Object.keys(focusedMatch.attributeBreakdown).length} upcoming and historical comparison fields are scored here as supporting match evidence.</p>
+                  <p>Both catalogs show the same four primary fields and can expand to all {Object.keys(focusedMatch.attributeBreakdown).length} scored attributes. The comparison below explains every match contribution.</p>
                 </div>
                 <div className="evidence-scores">
                   <ScoreRing score={focusedMatch.combinedScore} label="Combined" />
