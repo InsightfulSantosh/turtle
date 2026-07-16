@@ -72,8 +72,8 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.doesNotMatch(pageSource, /View all product details/);
   assert.match(pageSource, /queue-commercial/);
   assert.match(stylesSource, /\.catalog-attribute-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
-  assert.match(stylesSource, /\.match-grid\.match-grid-5\s*\{[^}]*repeat\(5,\s*minmax\(210px,\s*calc\(\(100% - 30px\) \/ 4\)\)\)/s);
-  assert.match(stylesSource, /\.match-grid\.match-grid-8\s*\{[^}]*repeat\(8,\s*minmax\(210px,\s*calc\(\(100% - 30px\) \/ 4\)\)\)/s);
+  assert.match(stylesSource, /\.match-grid\.match-grid-5\s*\{[^}]*repeat\(5,\s*max\(210px,\s*calc\(\(100% - 30px\) \/ 4\)\)\)/s);
+  assert.match(stylesSource, /\.match-grid\.match-grid-8\s*\{[^}]*repeat\(8,\s*max\(210px,\s*calc\(\(100% - 30px\) \/ 4\)\)\)/s);
   assert.match(stylesSource, /\.match-grid\.match-grid-5,\s*\.match-grid\.match-grid-8\s*\{[^}]*overflow-x:\s*auto/s);
   assert.match(stylesSource, /\.catalog-attribute-grid dd\s*\{[^}]*overflow-wrap:\s*break-word[^}]*word-break:\s*normal/s);
   assert.match(stylesSource, /\.catalog-attribute-toggle\s*\{[^}]*width:\s*auto/s);

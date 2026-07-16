@@ -1164,11 +1164,11 @@ select {
 }
 
 .match-grid.match-grid-5 {
-  grid-template-columns: repeat(5, minmax(210px, calc((100% - 30px) / 4)));
+  grid-template-columns: repeat(5, max(210px, calc((100% - 30px) / 4)));
 }
 
 .match-grid.match-grid-8 {
-  grid-template-columns: repeat(8, minmax(210px, calc((100% - 30px) / 4)));
+  grid-template-columns: repeat(8, max(210px, calc((100% - 30px) / 4)));
 }
 
 .match-grid.match-grid-5,
