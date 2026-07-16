@@ -29,7 +29,7 @@ external hosting or authentication platform.
 | Historical image coverage | 33 / 33 |
 | Upcoming image coverage | 164 / 167 |
 | Missing upcoming images | 3 |
-| POC model version | 2.3.0 |
+| POC model version | 2.3.1 |
 | FashionCLIP dimension | 512 |
 
 The three upcoming items without a usable local image are
@@ -87,13 +87,13 @@ default model; changing a control does not retrain the model.
 
 | Metric | Current result |
 |---|---:|
-| Leave-one-out WAPE | 40.59% |
-| Mean absolute error | 168.7 units |
-| Forecast bias | +3.07% |
+| Leave-one-out WAPE | 40.57% |
+| Mean absolute error | 168.6 units |
+| Forecast bias | +3.08% |
 | Empirical conformal interval coverage | 87.88% |
 | Conformal half-width before similarity adjustment | 325 units |
-| High match-confidence items | 27 |
-| Medium match-confidence items | 120 |
+| High match-confidence items | 25 |
+| Medium match-confidence items | 122 |
 | Low match-confidence items | 20 |
 | Narrow demand-uncertainty ranges | 0 |
 | Moderate demand-uncertainty ranges | 5 |
@@ -102,7 +102,7 @@ default model; changing a control does not retrain the model.
 These results are evidence for a POC, not production certification. Leave-one-out
 validation is used because only 33 historical outcomes were supplied. A credible
 production assessment needs at least three clean seasons and a forward temporal
-holdout. Model v2.3 reports two deliberately separate signals: match confidence
+holdout. Model v2.3.1 reports two deliberately separate signals: match confidence
 describes the relevance and quality of the historical analogues, while demand
 uncertainty describes the conformal forecast half-width relative to the proposed
 buy. A product can therefore have a high-confidence match and a wide demand

@@ -27,8 +27,13 @@ def norm(value: object) -> str:
     return " ".join(str(value or "").upper().split()).strip()
 
 
-def canonical_plus(value: object) -> str:
-    return "+".join(sorted(part.strip() for part in norm(value).split("+")))
+def lifecycle_family(value: object) -> str:
+    lifecycle = norm(value)
+    if lifecycle.startswith("SS"):
+        return "SS"
+    if lifecycle.startswith("AW"):
+        return "AW"
+    return lifecycle
 
 
 def token_set(value: object) -> set[str]:
@@ -210,7 +215,7 @@ def attribute_score(upcoming: dict[str, object], historical: dict[str, object]):
         "sleeve": categorical(upcoming["SEGMENT5"], historical["SLEEVS"]),
         "provision": categorical(upcoming["SEGMENT6"], historical["PROV"]),
         "pattern": pattern_similarity(upcoming["CAT1"], historical["CAT1"]),
-        "range": 1.0 if canonical_plus(upcoming["CAT2"]) == canonical_plus(historical["CAT2"]) else 0.0,
+        "lifecycle": categorical(lifecycle_family(upcoming["CAT6"]), lifecycle_family(historical["CAT6"])),
         "fit": categorical(upcoming["CAT3"], historical["CAT3"]),
         "fabric": max(categorical(upcoming["CAT4"], historical["CAT4"]), jaccard(upcoming["CAT4"], historical["CAT4"])),
         "fashion": categorical(upcoming["CAT5"], historical["CAT5"]),
@@ -222,7 +227,7 @@ def attribute_score(upcoming: dict[str, object], historical: dict[str, object]):
         "sleeve": 0.07,
         "provision": 0.07,
         "pattern": 0.16,
-        "range": 0.04,
+        "lifecycle": 0.04,
         "fit": 0.14,
         "fabric": 0.14,
         "fashion": 0.02,

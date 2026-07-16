@@ -2,11 +2,11 @@
 
 This directory contains two related runtimes:
 
-- a fitted v2.3 pilot that serves the local sample artifact; and
+- a fitted v2.3.1 pilot that serves the local sample artifact; and
 - a v3 scale architecture for PostgreSQL/pgvector retrieval, learned ranking,
   quantile demand forecasting, constrained ordering, jobs and feedback.
 
-The v2.3 pilot is active and reproducible. The v3 software path is implemented,
+The v2.3.1 pilot is active and reproducible. The v3 software path is implemented,
 but production model artifacts and a populated client catalogue are not present.
 
 ## Status at a glance
@@ -31,7 +31,7 @@ but production model artifacts and a populated client catalogue are not present.
 
 | Field | Value |
 |---|---|
-| Model version | 2.3.0 |
+| Model version | 2.3.1 |
 | Training outcomes | 33 historical items |
 | Upcoming catalogue | 167 items |
 | Image coverage | 33/33 historical; 164/167 upcoming |
@@ -43,9 +43,9 @@ but production model artifacts and a populated client catalogue are not present.
 | Demand ensemble | 50% analogue + 50% scikit-learn Ridge; alpha 10 |
 | Target sell-through | 70% |
 | Evaluation | Leave-one-out; temporal holdout unavailable |
-| WAPE | 40.59% |
-| MAE | 168.7 units |
-| Bias | +3.07% |
+| WAPE | 40.57% |
+| MAE | 168.6 units |
+| Bias | +3.08% |
 | Interval | Finite-sample 80% conformal; 87.88% empirical coverage |
 | Pilot order limits | 25-unit pack; 100 minimum; 2,000 maximum |
 
@@ -63,7 +63,7 @@ double-count structured commercial information.
 | Sleeve | 7% | Exact categorical match |
 | Provision/fit code | 7% | Exact categorical match |
 | Pattern | 16% | Exact or mapped pattern-family similarity |
-| Range | 4% | Canonicalized set match |
+| Season family | 4% | Normalized `AW`, `SS`, or `CORE` match |
 | Fit/collection | 14% | Exact categorical match |
 | Fabric | 14% | Exact match or token Jaccard similarity |
 | Fashion/merch type | 2% | Exact categorical match |
@@ -96,7 +96,7 @@ validation before production.
 
 This separation prevents a strong product match from being mislabeled as a weak
 match simply because the demand model has limited history. In the current sample,
-27 items have high match confidence, while 162 of 167 items retain wide demand
+25 items have high match confidence, while 162 of 167 items retain wide demand
 uncertainty because the fitted conformal half-width is 325 units.
 
 The interface can change similarity weights, target sell-through and analogue

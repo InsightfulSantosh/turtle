@@ -77,7 +77,7 @@ type UpcomingItem = {
 };
 
 type ComparableProduct = Pick<UpcomingItem,
-  "itemType" | "sleeve" | "provision" | "pattern" | "range" |
+  "itemType" | "sleeve" | "provision" | "pattern" | "lifecycle" |
   "fit" | "fabric" | "fashion" | "colour" | "mrp"
 >;
 
@@ -160,12 +160,19 @@ const moneyFormatter = new Intl.NumberFormat("en-IN", {
   maximumFractionDigits: 0,
 });
 
+function seasonFamily(value: string) {
+  const normalized = value.trim().toUpperCase();
+  if (normalized.startsWith("SS")) return "SS";
+  if (normalized.startsWith("AW")) return "AW";
+  return normalized || "Not provided";
+}
+
 const attributeValueReaders: Record<string, (item: ComparableProduct) => string> = {
   category: (item) => item.itemType,
   sleeve: (item) => item.sleeve,
   provision: (item) => item.provision,
   pattern: (item) => item.pattern,
-  range: (item) => item.range,
+  lifecycle: (item) => seasonFamily(item.lifecycle),
   fit: (item) => item.fit,
   fabric: (item) => item.fabric,
   fashion: (item) => item.fashion,
@@ -178,7 +185,7 @@ const attributeLabels: Record<string, string> = {
   sleeve: "Sleeve",
   provision: "Fit code",
   pattern: "Pattern",
-  range: "Range",
+  lifecycle: "Season family",
   fit: "Collection",
   fabric: "Fabric",
   fashion: "Merch type",
@@ -190,7 +197,7 @@ const attributeDriverPriority = [
   "pattern",
   "fabric",
   "colour",
-  "range",
+  "lifecycle",
   "fit",
   "fashion",
   "price",

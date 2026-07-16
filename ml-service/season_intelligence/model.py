@@ -15,7 +15,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 
-MODEL_VERSION = "2.3.0"
+MODEL_VERSION = "2.3.1"
 DEFAULT_TARGET_SELL_THROUGH = 0.70
 PACK_SIZE = 25
 MIN_BUY = 100
@@ -64,7 +64,7 @@ ATTRIBUTE_WEIGHTS = {
     "sleeve": 0.07,
     "provision": 0.07,
     "pattern": 0.16,
-    "range": 0.04,
+    "lifecycle": 0.04,
     "fit": 0.14,
     "fabric": 0.14,
     "fashion": 0.02,
@@ -79,6 +79,15 @@ def norm(value: Any) -> str:
 
 def canonical_plus(value: Any) -> str:
     return "+".join(sorted(part.strip() for part in norm(value).split("+")))
+
+
+def lifecycle_family(value: Any) -> str:
+    lifecycle = norm(value)
+    if lifecycle.startswith("SS"):
+        return "SS"
+    if lifecycle.startswith("AW"):
+        return "AW"
+    return lifecycle
 
 
 def token_set(value: Any) -> set[str]:
@@ -124,7 +133,10 @@ def attribute_similarity(left: dict[str, Any], right: dict[str, Any]) -> tuple[f
         "sleeve": categorical(left.get("sleeve"), right.get("sleeve")),
         "provision": categorical(left.get("provision"), right.get("provision")),
         "pattern": pattern_similarity(left.get("pattern"), right.get("pattern")),
-        "range": 1.0 if canonical_plus(left.get("range")) == canonical_plus(right.get("range")) else 0.0,
+        "lifecycle": categorical(
+            lifecycle_family(left.get("lifecycle")),
+            lifecycle_family(right.get("lifecycle")),
+        ),
         "fit": categorical(left.get("fit"), right.get("fit")),
         "fabric": max(categorical(left.get("fabric"), right.get("fabric")), jaccard(left.get("fabric"), right.get("fabric"))),
         "fashion": categorical(left.get("fashion"), right.get("fashion")),
@@ -214,8 +226,7 @@ def demand_features(item: dict[str, Any]) -> dict[str, float]:
 
     pattern = norm(item.get("pattern"))
     colour = norm(item.get("colour"))
-    lifecycle = norm(item.get("lifecycle"))
-    season_family = "SS" if lifecycle.startswith("SS") else "AW" if lifecycle.startswith("AW") else lifecycle
+    season_family = lifecycle_family(item.get("lifecycle"))
     categorical_values = {
         "item_type": norm(item.get("itemType")),
         "sleeve": norm(item.get("sleeve")),

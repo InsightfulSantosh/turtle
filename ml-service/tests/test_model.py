@@ -31,6 +31,7 @@ def test_category_mismatch_is_strongly_penalized() -> None:
         "provision": "SF",
         "pattern": "CHECKS",
         "range": "CMI + VMI",
+        "lifecycle": "AW2026",
         "fit": "TAILORED",
         "fabric": "100% Cotton",
         "fashion": "FASHION",
@@ -41,6 +42,21 @@ def test_category_mismatch_is_strongly_penalized() -> None:
     different = dict(base, itemType="OTTS")
     assert attribute_similarity(base, same)[0] == 1.0
     assert attribute_similarity(base, different)[0] < 0.5
+
+
+def test_constant_range_is_replaced_by_season_family() -> None:
+    left = {
+        "itemType": "OTSH", "sleeve": "F", "provision": "SF", "pattern": "CHECKS",
+        "range": "CMI + VMI", "lifecycle": "AW2026", "fit": "TAILORED",
+        "fabric": "100% Cotton", "fashion": "FASHION", "colour": "BLUE", "mrp": 1_899,
+    }
+    same_season = dict(left, range="ANOTHER INTERNAL CODE", lifecycle="AW2025")
+    different_season = dict(left, lifecycle="SS2026")
+    _, same_breakdown = attribute_similarity(left, same_season)
+    _, different_breakdown = attribute_similarity(left, different_season)
+    assert "range" not in same_breakdown
+    assert same_breakdown["lifecycle"] == 1.0
+    assert different_breakdown["lifecycle"] == 0.0
 
 
 def test_normalized_demand_contains_bad_sales_row() -> None:
@@ -66,7 +82,7 @@ def test_match_confidence_is_separate_from_demand_uncertainty() -> None:
 
 def test_generated_artifact_contract() -> None:
     data = json.loads((APP_ROOT / "app" / "generated-data.json").read_text(encoding="utf-8"))
-    assert data["meta"]["model"]["version"] == "2.3.0"
+    assert data["meta"]["model"]["version"] == "2.3.1"
     assert data["meta"]["model"]["demandLibrary"] == "scikit-learn"
     assert "FashionCLIP" in data["meta"]["visualMethod"]
     assert data["meta"]["visionModel"]["modelId"] == "patrickjohncyh/fashion-clip"
