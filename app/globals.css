@@ -1222,11 +1222,17 @@ select {
 }
 
 .match-image {
+  aspect-ratio: auto 3 / 4;
   background: linear-gradient(135deg, #eee9df, #e6dfd4);
-  height: 320px;
+  display: block;
+  height: auto;
   object-fit: contain;
   object-position: center;
   width: 100%;
+}
+
+.image-fallback.match-image {
+  aspect-ratio: 3 / 4;
 }
 
 .match-copy {
