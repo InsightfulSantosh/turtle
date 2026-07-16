@@ -88,7 +88,7 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.doesNotMatch(stylesSource, /\.match-card \.catalog-attribute-grid (?:dt|dd)\s*\{[^}]*font-size/s);
   assert.match(stylesSource, /\.match-card \.catalog-attribute-grid dd\s*\{[^}]*font-weight:\s*700[^}]*min-height:\s*0/s);
   assert.match(stylesSource, /\.match-card \.catalog-attribute-toggle\s*\{[^}]*min-height:\s*20px/s);
-  assert.match(stylesSource, /\.hero-product-image\s*\{[^}]*aspect-ratio:\s*auto 3 \/ 4[^}]*height:\s*auto[^}]*margin:\s*12px -15px 0[^}]*max-width:\s*none[^}]*object-fit:\s*contain[^}]*width:\s*calc\(100% \+ 30px\)/s);
+  assert.match(stylesSource, /\.hero-product-image\s*\{[^}]*aspect-ratio:\s*auto 3 \/ 4[^}]*border-radius:\s*13px[^}]*height:\s*auto[^}]*margin:\s*12px auto 0[^}]*max-width:\s*100%[^}]*object-fit:\s*contain[^}]*object-position:\s*center[^}]*width:\s*100%/s);
   assert.match(stylesSource, /\.image-fallback\.hero-product-image\s*\{[^}]*aspect-ratio:\s*3 \/ 4/s);
   assert.match(stylesSource, /\.match-image\s*\{[^}]*aspect-ratio:\s*auto 3 \/ 4[^}]*height:\s*auto[^}]*object-fit:\s*contain/s);
   assert.match(stylesSource, /\.image-fallback\.match-image\s*\{[^}]*aspect-ratio:\s*3 \/ 4/s);

@@ -619,13 +619,14 @@ select {
 .hero-product-image {
   aspect-ratio: auto 3 / 4;
   background: linear-gradient(135deg, #eee9df, #e6dfd4);
+  border-radius: 13px;
   display: block;
   height: auto;
-  margin: 12px -15px 0;
-  max-width: none;
+  margin: 12px auto 0;
+  max-width: 100%;
   object-fit: contain;
   object-position: center;
-  width: calc(100% + 30px);
+  width: 100%;
 }
 
 .image-fallback.hero-product-image {
