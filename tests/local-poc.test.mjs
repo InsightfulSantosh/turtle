@@ -87,9 +87,9 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.match(stylesSource, /\.match-card::after\s*\{[^}]*border:\s*2px solid transparent[^}]*inset:\s*0[^}]*pointer-events:\s*none[^}]*z-index:\s*3/s);
   assert.match(stylesSource, /\.match-card:hover::after,\s*\.match-card\.active::after\s*\{[^}]*border-color:\s*var\(--forest-2\)/s);
   assert.doesNotMatch(stylesSource, /\.match-card:hover,\s*\.match-card\.active\s*\{[^}]*transform:/s);
-  assert.match(stylesSource, /\.match-card \.catalog-attribute-grid > div\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column[^}]*min-height:\s*28px/s);
+  assert.match(stylesSource, /\.match-card \.catalog-attribute-grid > div\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column[^}]*min-height:\s*26px/s);
   assert.doesNotMatch(stylesSource, /\.match-card \.catalog-attribute-grid > div:nth-child/);
-  assert.match(stylesSource, /\.match-performance\s*\{[^}]*margin-top:\s*5px[^}]*padding-top:\s*5px/s);
+  assert.match(stylesSource, /\.match-performance\s*\{[^}]*margin-top:\s*4px[^}]*padding-top:\s*4px/s);
   assert.match(stylesSource, /\.match-performance span\s*\{[^}]*font-size:\s*10px/s);
   assert.match(stylesSource, /\.match-performance small\s*\{[^}]*white-space:\s*nowrap/s);
   assert.doesNotMatch(stylesSource, /\.match-card \.match-attribute-catalog-heading[^}]*font-size/s);
@@ -101,8 +101,8 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.match(stylesSource, /\.attribute-evidence\s*\{[^}]*grid-template-columns:\s*repeat\(3,/s);
   assert.match(stylesSource, /\.hero-product-image\s*\{[^}]*aspect-ratio:\s*auto 3 \/ 4[^}]*border-radius:\s*13px[^}]*height:\s*auto[^}]*margin:\s*12px auto 0[^}]*max-width:\s*100%[^}]*object-fit:\s*contain[^}]*object-position:\s*center[^}]*width:\s*100%/s);
   assert.match(stylesSource, /\.image-fallback\.hero-product-image\s*\{[^}]*aspect-ratio:\s*3 \/ 4/s);
-  assert.match(stylesSource, /\.match-image\s*\{[^}]*aspect-ratio:\s*auto 3 \/ 4[^}]*height:\s*auto[^}]*object-fit:\s*contain/s);
-  assert.match(stylesSource, /\.image-fallback\.match-image\s*\{[^}]*aspect-ratio:\s*3 \/ 4/s);
+  assert.match(stylesSource, /\.match-image\s*\{[^}]*aspect-ratio:\s*5 \/ 6[^}]*height:\s*auto[^}]*object-fit:\s*contain/s);
+  assert.match(stylesSource, /\.image-fallback\.match-image\s*\{[^}]*aspect-ratio:\s*5 \/ 6/s);
   assert.match(stylesSource, /\.recommendation-metrics\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
   assert.match(stylesSource, /\.recommendation-metrics small,[^}]*overflow-wrap:\s*anywhere/s);
   assert.match(stylesSource, /\.queue-commercial\s*\{[^}]*justify-content:\s*space-between/s);
