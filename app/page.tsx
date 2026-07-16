@@ -319,12 +319,32 @@ function ProductImage({
   );
 }
 
-function MatchConfidencePill({ confidence }: { confidence: Confidence }) {
-  return <span className={`confidence-pill ${confidence.toLowerCase()}`}>{confidence} match</span>;
+function MatchConfidencePill({
+  confidence,
+  detailed = false,
+}: {
+  confidence: Confidence;
+  detailed?: boolean;
+}) {
+  return (
+    <span className={`confidence-pill ${confidence.toLowerCase()}`}>
+      {confidence} {detailed ? "match confidence" : "match"}
+    </span>
+  );
 }
 
-function UncertaintyPill({ uncertainty }: { uncertainty: DemandUncertainty }) {
-  return <span className={`uncertainty-pill ${uncertainty.toLowerCase()}`}>{uncertainty} uncertainty</span>;
+function UncertaintyPill({
+  uncertainty,
+  detailed = false,
+}: {
+  uncertainty: DemandUncertainty;
+  detailed?: boolean;
+}) {
+  return (
+    <span className={`uncertainty-pill ${uncertainty.toLowerCase()}`}>
+      {uncertainty} {detailed ? "demand uncertainty" : "uncertainty"}
+    </span>
+  );
 }
 
 function ScoreRing({ score, label }: { score: number; label: string }) {
@@ -636,8 +656,8 @@ function App() {
                     <p>FashionCLIP retrieval + scikit-learn demand model</p>
                   </div>
                   <div className="signal-pills">
-                    <MatchConfidencePill confidence={decision.matchConfidence} />
-                    <UncertaintyPill uncertainty={decision.demandUncertainty} />
+                    <MatchConfidencePill confidence={decision.matchConfidence} detailed />
+                    <UncertaintyPill uncertainty={decision.demandUncertainty} detailed />
                   </div>
                 </div>
                 <div className="quantity-hero">
@@ -657,10 +677,10 @@ function App() {
                   </p>
                 </div>
                 <div className="recommendation-metrics">
-                  <div><small>Top analogue</small><strong>{decision.ranked[0]?.historicalId}</strong></div>
-                  <div><small>Analogue demand</small><strong>{numberFormatter.format(decision.analogueQuantity)}</strong></div>
-                  <div><small>Ridge baseline</small><strong>{numberFormatter.format(decision.regressionQuantity)}</strong></div>
-                  <div><small>Backtest WAPE</small><strong>{scorePercent(dataset.meta.model.backtest.wape)}</strong></div>
+                  <div><small>Top historical analogue</small><strong>{decision.ranked[0]?.historicalId}</strong></div>
+                  <div><small>Analogue-based demand</small><strong>{numberFormatter.format(decision.analogueQuantity)} units</strong></div>
+                  <div><small>Ridge model baseline</small><strong>{numberFormatter.format(decision.regressionQuantity)} units</strong></div>
+                  <div><small>Backtest error (WAPE)</small><strong>{scorePercent(dataset.meta.model.backtest.wape)}</strong></div>
                 </div>
                 <div className="override-row">
                   <label>
@@ -811,14 +831,14 @@ function App() {
           </div>
           <div className="portfolio-toolbar">
             <label className="search-box wide"><span>⌕</span><input value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} placeholder="Search item, pattern, colour or fabric" /></label>
-            <select value={segment} onChange={(event) => setSegment(event.target.value)}><option>All</option><option>OTSH</option><option>OTTS</option></select>
+            <select value={segment} onChange={(event) => setSegment(event.target.value)} aria-label="Filter portfolio category"><option>All</option><option>OTSH</option><option>OTTS</option></select>
             <select value={matchConfidenceFilter} onChange={(event) => setMatchConfidenceFilter(event.target.value)} aria-label="Filter portfolio match confidence"><option value="All">All matches</option><option value="High">High match</option><option value="Medium">Medium match</option><option value="Low">Low match</option></select>
             <select value={uncertaintyFilter} onChange={(event) => setUncertaintyFilter(event.target.value)} aria-label="Filter portfolio demand uncertainty"><option value="All">All ranges</option><option value="Narrow">Narrow range</option><option value="Moderate">Moderate range</option><option value="Wide">Wide range</option></select>
             <span>{queueItems.length} results</span>
           </div>
           <div className="portfolio-table-wrap">
             <table className="portfolio-table">
-              <thead><tr><th>Upcoming style</th><th>Product attributes</th><th>Top historical analogue</th><th>Match</th><th>Decision signals</th><th>System buy</th><th>Planner buy</th><th /></tr></thead>
+              <thead><tr><th>Upcoming style</th><th>Product attributes</th><th>Top historical analogue</th><th>Match score</th><th>Decision signals</th><th>Recommended buy</th><th>Planner buy</th><th><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>
                 {queueItems.map(({ item, decision: itemDecision }) => {
                   const top = itemDecision.ranked[0];
@@ -829,7 +849,7 @@ function App() {
                       <td><strong>{item.pattern}</strong><small>{item.fit} · {item.fabric}</small></td>
                       <td>{historical && <div className="table-product"><ProductImage src={historical.imageUrl} alt={historical.id} className="table-image" /><span><strong>{historical.id}</strong><small>{historical.season} · ST {scorePercent(historical.sellThrough)}</small></span></div>}</td>
                       <td><strong className="match-score">{scorePercent(top?.combinedScore ?? 0)}</strong><small>Attr {scorePercent(top?.attributeScore ?? 0)} · Visual {scorePercent(top?.visualScore ?? 0)}</small></td>
-                      <td><div className="table-signals"><MatchConfidencePill confidence={itemDecision.matchConfidence} /><UncertaintyPill uncertainty={itemDecision.demandUncertainty} /></div></td>
+                      <td><div className="table-signals"><MatchConfidencePill confidence={itemDecision.matchConfidence} detailed /><UncertaintyPill uncertainty={itemDecision.demandUncertainty} detailed /></div></td>
                       <td><strong>{numberFormatter.format(itemDecision.quantity)}</strong><small>{numberFormatter.format(itemDecision.low)}–{numberFormatter.format(itemDecision.high)}</small></td>
                       <td><strong>{overrides[item.id] ? numberFormatter.format(overrides[item.id]) : "—"}</strong><small>{overrides[item.id] ? "Adjusted" : "Pending"}</small></td>
                       <td><button className="row-action" onClick={() => chooseItem(item.id)}>Review →</button></td>

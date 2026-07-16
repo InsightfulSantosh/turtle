@@ -4,11 +4,13 @@ import test from "node:test";
 
 const artifactUrl = new URL("../app/generated-data.json", import.meta.url);
 const pageUrl = new URL("../app/page.tsx", import.meta.url);
+const stylesUrl = new URL("../app/globals.css", import.meta.url);
 
 test("keeps the local POC and fitted model contract intact", async () => {
-  const [artifactText, pageSource] = await Promise.all([
+  const [artifactText, pageSource, stylesSource] = await Promise.all([
     readFile(artifactUrl, "utf8"),
     readFile(pageUrl, "utf8"),
+    readFile(stylesUrl, "utf8"),
   ]);
   const artifact = JSON.parse(artifactText);
 
@@ -30,4 +32,8 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.match(pageSource, /FashionCLIP retrieval \+ scikit-learn demand model/);
   assert.match(pageSource, /Match confidence/);
   assert.match(pageSource, /Demand uncertainty/);
+  assert.match(pageSource, /Top historical analogue/);
+  assert.match(pageSource, /Analogue-based demand/);
+  assert.match(stylesSource, /\.recommendation-metrics\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
+  assert.match(stylesSource, /\.recommendation-metrics small,[^}]*overflow-wrap:\s*anywhere/s);
 });
