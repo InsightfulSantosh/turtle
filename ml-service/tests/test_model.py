@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
+
 from season_intelligence.model import (
     attribute_similarity,
     calibrate_vision,
+    fit_demand_pipeline,
     normalized_demand,
 )
 
@@ -42,9 +45,21 @@ def test_normalized_demand_contains_bad_sales_row() -> None:
     assert normalized_demand(item) <= 600
 
 
+def test_demand_model_uses_sklearn_pipeline() -> None:
+    rows = [
+        {"itemType": "OTSH", "pattern": "CHECKS", "fabric": "COTTON", "mrp": 1_499},
+        {"itemType": "OTSH", "pattern": "PLAINS", "fabric": "LINEN", "mrp": 1_999},
+        {"itemType": "OTTS", "pattern": "PRINTS", "fabric": "COTTON", "mrp": 999},
+    ]
+    pipeline = fit_demand_pipeline(rows, np.asarray([500.0, 350.0, 200.0]), alpha=1.0)
+    assert list(pipeline.named_steps) == ["features", "scale", "ridge"]
+    assert np.isfinite(pipeline.predict([rows[0]])[0])
+
+
 def test_generated_artifact_contract() -> None:
     data = json.loads((APP_ROOT / "app" / "generated-data.json").read_text(encoding="utf-8"))
-    assert data["meta"]["model"]["version"] == "2.1.0"
+    assert data["meta"]["model"]["version"] == "2.2.0"
+    assert data["meta"]["model"]["demandLibrary"] == "scikit-learn"
     assert "FashionCLIP" in data["meta"]["visualMethod"]
     assert data["meta"]["visionModel"]["modelId"] == "patrickjohncyh/fashion-clip"
     assert data["meta"]["visionModel"]["embeddingDimension"] == 512

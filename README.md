@@ -15,8 +15,8 @@ application does not call ChatGPT or the OpenAI API.
 | Planner interface | Active locally | Compare products, inspect match evidence, run scenarios, review the portfolio and export CSV |
 | FashionCLIP image matching | Active in the POC | Real 512-dimensional embeddings from the supplied product images |
 | Attribute similarity | Active in the POC | Weighted category, pattern, fit, fabric, colour, price and related evidence |
-| Historical analogue retrieval | Active in the POC | All 33 historical products are scored; the validated default uses the top 8 |
-| Order recommendation | Active as a pilot | Analogue demand blended with regularized regression and uncertainty guardrails |
+| Historical analogue retrieval | Active in the POC | All 33 historical products are scored; the validated default uses the top 3 |
+| Order recommendation | Active as a pilot | Analogue demand blended with a scikit-learn Ridge pipeline and uncertainty guardrails |
 | Sample Python API | Implemented and tested | Versioned v1 model and recommendation endpoints use the fitted POC artifact |
 | Scale platform | Code implemented, not production-activated | Requires a populated pgvector catalogue and approved trained model artifacts |
 | External hosting | Not configured | Run at `http://localhost:3000` |
@@ -30,7 +30,7 @@ application does not call ChatGPT or the OpenAI API.
 | Historical image coverage | 33 / 33 |
 | Upcoming image coverage | 164 / 167 |
 | Missing upcoming images | 3 |
-| POC model version | 2.1.0 |
+| POC model version | 2.2.0 |
 | FashionCLIP dimension | 512 |
 
 The three upcoming items without a usable local image are
@@ -55,7 +55,8 @@ uses the generated artifact and does not need a live embedding service.
    selected top products as demand evidence.
 6. Normalize historical sales to the target sell-through and contain anomalous
    rows relative to observed supply.
-7. Blend similarity-weighted analogue demand with a ridge-regression baseline.
+7. Fit a scikit-learn `DictVectorizer` → `StandardScaler` → `Ridge` pipeline and
+   blend its prediction with similarity-weighted analogue demand.
 8. Apply an out-of-fold conformal range, 25-unit pack rounding, and 100–2,000
    unit pilot limits.
 
@@ -63,18 +64,20 @@ uses the generated artifact and does not need a live embedding service.
 
 | Setting | Default | Meaning |
 |---|---:|---|
-| Attribute weight | 80% | Structured commercial and product evidence |
-| FashionCLIP weight | 20% | Garment-image similarity |
-| Historical products used | 8 | Highest-ranked analogues included in the quantity calculation |
-| Analogue forecast blend | 65% | Similarity-weighted historical demand |
-| Regression blend | 35% | Regularized multivariate demand baseline |
+| Attribute weight | 30% | Structured commercial and product evidence |
+| FashionCLIP weight | 70% | Garment-image similarity |
+| Historical products used | 3 | Highest-ranked analogues included in the quantity calculation |
+| Analogue forecast blend | 50% | Similarity-weighted historical demand |
+| Ridge forecast blend | 50% | Fitted scikit-learn multivariate demand baseline |
 | Target sell-through | 70% | Planning policy used to translate sales demand into inventory |
 
-The 80/20 similarity blend is the best result inside the current coarse training
-grid, which tests attribute weights from 40% to 80%. Because it selected the edge
-of that grid and only 33 outcomes are available, it must not be treated as a
-final production weight. Production selection requires wider, nested temporal
-validation and planner-labelled relevance pairs.
+`scikit-learn` performs the pilot model selection with `LeaveOneOut` and
+`ParameterGrid`. The search tests attribute weights from 10% to 90%, top 3/5/8
+analogues, Ridge penalties of 0.1/1/10/100, and regression blends of
+15%/25%/35%/50%. The selected 30/70 similarity blend, top 3, 50/50 demand blend,
+and Ridge alpha 10 are still pilot defaults because only 33 outcomes are
+available. Production selection requires nested temporal validation and
+planner-labelled relevance pairs.
 
 The interface allows live scenario changes to the similarity weights, target
 sell-through and analogue count. A custom scenario recalculates rankings and
@@ -87,18 +90,18 @@ default model; changing a control does not retrain the model.
 |---|---:|
 | Leave-one-out WAPE | 40.59% |
 | Mean absolute error | 168.7 units |
-| Forecast bias | +9.45% |
+| Forecast bias | +3.07% |
 | Empirical conformal interval coverage | 87.88% |
-| Conformal half-width before similarity adjustment | 350 units |
-| Medium-confidence upcoming items | 78 |
-| Low-confidence upcoming items | 89 |
-| High-confidence upcoming items | 0 |
+| Conformal half-width before similarity adjustment | 325 units |
+| Medium-confidence upcoming items | 58 |
+| Low-confidence upcoming items | 108 |
+| High-confidence upcoming items | 1 |
 
 These results are evidence for a POC, not production certification. Leave-one-out
 validation is used because only 33 historical outcomes were supplied. A credible
 production assessment needs at least three clean seasons and a forward temporal
-holdout. The absence of high-confidence recommendations correctly reflects the
-small sample and wide uncertainty.
+holdout. The predominance of low-confidence recommendations reflects the small
+sample and wide uncertainty.
 
 The fitted data also contains eight dispatch-above-order records, one
 sales-above-dispatch record and one sell-through-above-100% record. The pipeline
@@ -155,8 +158,9 @@ HF_HOME=.model-cache PYTHON=.venv/bin/python ./ml-service/tools/build_fashion_cl
 ```
 
 The final command replaces the temporary preprocessing similarities with real
-FashionCLIP distances, performs leave-one-out model selection and atomically
-refreshes `app/generated-data.json`. The model cache is local and git-ignored.
+FashionCLIP distances, fits and validates the scikit-learn demand pipeline, and
+atomically refreshes `app/generated-data.json`. The model cache is local and
+git-ignored.
 
 ## Verification
 
@@ -175,7 +179,7 @@ Python model and scale components:
 .venv/bin/python -m pytest -q ml-service/tests
 ```
 
-The current suite contains 10 Python tests plus a rendered-HTML regression test.
+The current suite contains 11 Python tests plus a rendered-HTML regression test.
 
 ## Scale architecture status
 

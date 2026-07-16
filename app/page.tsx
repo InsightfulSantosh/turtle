@@ -97,6 +97,10 @@ type Dataset = {
       trainingRows: number;
       targetSellThrough: number;
       algorithm: string;
+      demandLibrary: string;
+      demandPipeline: string;
+      modelSelection: string;
+      attributeWeightGrid: number[];
       attributeWeight: number;
       visualWeight: number;
       topK: number;
@@ -576,7 +580,7 @@ function App() {
                 <div className="recommendation-topline">
                   <div>
                     <span className="card-label">AI buy recommendation</span>
-                    <p>FashionCLIP retrieval + validated demand ensemble</p>
+                    <p>FashionCLIP retrieval + scikit-learn demand model</p>
                   </div>
                   <ConfidencePill confidence={decision.confidence} />
                 </div>
@@ -593,13 +597,13 @@ function App() {
                 <div className="rationale-box">
                   <span className="rationale-icon">✦</span>
                   <p>
-                    <b>{topK} neural and attribute analogues</b> are blended with a regularized demand model. The range is calibrated from out-of-fold errors, not a fixed percentage.
+                    <b>{topK} neural and attribute analogues</b> are blended with a scikit-learn Ridge model. The range is calibrated from out-of-fold errors, not a fixed percentage.
                   </p>
                 </div>
                 <div className="recommendation-metrics">
                   <div><small>Top analogue</small><strong>{decision.ranked[0]?.historicalId}</strong></div>
                   <div><small>Analogue demand</small><strong>{numberFormatter.format(decision.analogueQuantity)}</strong></div>
-                  <div><small>ML baseline</small><strong>{numberFormatter.format(decision.regressionQuantity)}</strong></div>
+                  <div><small>Ridge baseline</small><strong>{numberFormatter.format(decision.regressionQuantity)}</strong></div>
                   <div><small>Backtest WAPE</small><strong>{scorePercent(dataset.meta.model.backtest.wape)}</strong></div>
                 </div>
                 <div className="override-row">
@@ -661,8 +665,8 @@ function App() {
                   <small>Every selected product is shown below and contributes to the quantity calculation.</small>
                 </label>
                 <div className="method-note">
-                  <span>FashionCLIP + learned demand</span>
-                  <p>Fashion-domain image embeddings, validation-selected weights and top-K, regularized regression, and finite-sample conformal uncertainty.</p>
+                  <span>PyTorch FashionCLIP + scikit-learn</span>
+                  <p>Fashion-domain image embeddings, validation-selected weights and top-K, a fitted Ridge pipeline, and finite-sample conformal uncertainty.</p>
                 </div>
               </aside>
             </div>
@@ -784,15 +788,15 @@ function App() {
       {tab === "method" && (
         <section className="method-page page-wrap">
           <div className="page-heading method-heading">
-            <div><span className="eyebrow">AI with measurable evidence</span><h1>How model v{dataset.meta.model.version} reaches a recommendation</h1><p>A FashionCLIP retrieval and demand-learning workflow with validation, uncertainty, data guardrails, and planner control.</p></div>
-            <div className="poc-badge"><span>AI v2.1</span><small>FashionCLIP pilot</small></div>
+            <div><span className="eyebrow">AI with measurable evidence</span><h1>How model v{dataset.meta.model.version} reaches a recommendation</h1><p>A PyTorch/Transformers FashionCLIP and scikit-learn demand workflow with validation, uncertainty, data guardrails, and planner control.</p></div>
+            <div className="poc-badge"><span>AI v{dataset.meta.model.version}</span><small>Dedicated ML libraries</small></div>
           </div>
           <div className="workflow-grid">
             {[
               ["01", "Validate inputs", "Normalize identifiers and attributes, link images, and quarantine inconsistent order, dispatch, sales, and sell-through values."],
               ["02", "Encode products", "Create structured attribute evidence and 512-dimensional FashionCLIP embeddings from garment images."],
-              ["03", "Learn retrieval", "Tune attribute/vision weights and the neighbour count using out-of-fold historical predictions."],
-              ["04", "Predict demand", "Ensemble similarity-weighted analogue demand with a regularized multivariate regression baseline."],
+              ["03", "Learn retrieval", "Use scikit-learn ParameterGrid and LeaveOneOut to tune attribute/vision weights, neighbour count, blend, and regularization."],
+              ["04", "Predict demand", "Ensemble similarity-weighted analogue demand with a fitted DictVectorizer, StandardScaler, and Ridge pipeline."],
               ["05", "Quantify risk", "Generate a finite-sample conformal range, apply pack and quantity limits, and route uncertain buys to a planner."],
             ].map(([number, title, copy]) => <article key={number}><span>{number}</span><h3>{title}</h3><p>{copy}</p></article>)}
           </div>
@@ -810,7 +814,7 @@ function App() {
               </div>
               <div className="formula">
                 <p>Demand ensemble</p>
-                <strong>{Math.round((1 - dataset.meta.model.regressionBlend) * 100)}% analogue AI + {Math.round(dataset.meta.model.regressionBlend * 100)}% regularized regression</strong>
+                <strong>{Math.round((1 - dataset.meta.model.regressionBlend) * 100)}% analogue AI + {Math.round(dataset.meta.model.regressionBlend * 100)}% scikit-learn Ridge</strong>
               </div>
               <div className="formula">
                 <p>Uncertainty</p>
@@ -833,7 +837,7 @@ function App() {
             <div><span>Layer</span><b>Local sample now</b><b>Scale platform implementation</b></div>
             <div><span>Visual representation</span><p>{dataset.meta.visionModel.modelId} · {dataset.meta.visionModel.embeddingDimension}D cosine · revision {dataset.meta.visionModel.modelRevision?.slice(0, 8) ?? "unknown"}</p><p>Fine-tuned FashionCLIP image/text service; client-specific tuning awaits reviewed pairs</p></div>
             <div><span>Retrieval</span><p>Precomputed attribute and FashionCLIP scoring against all 33 historical styles</p><p>Metadata-filtered pgvector HNSW top-200 retrieval, then top-10 re-ranking</p></div>
-            <div><span>Quantity logic</span><p>Validation-tuned analogue + regularized regression ensemble</p><p>P10/P50/P90 LightGBM training and inference with MinTrace hierarchy reconciliation</p></div>
+            <div><span>Quantity logic</span><p>Validation-tuned analogue + {dataset.meta.model.demandPipeline} scikit-learn pipeline</p><p>P10/P50/P90 LightGBM training and inference with MinTrace hierarchy reconciliation</p></div>
             <div><span>Uncertainty</span><p>Out-of-fold conformal quantity range</p><p>Temporal quantiles calibrated by category, channel and region</p></div>
             <div><span>Workflow</span><p>Browser-session planner override</p><p>Durable batch jobs, feedback capture, model registry and recommendation audit schema</p></div>
             <div><span>Data</span><p>33 historical / 167 upcoming samples</p><p>3–5 seasons plus inventory and markdown context</p></div>

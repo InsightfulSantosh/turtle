@@ -15,9 +15,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from season_intelligence.contracts import BusinessConstraints
 from season_intelligence.model import (
-    FeatureEncoder,
     attribute_similarity,
     combined_similarity,
+    fit_demand_pipeline,
     recommend_one,
 )
 from season_intelligence.platform import build_scale_engine, serialize_recommendation
@@ -178,9 +178,12 @@ class ModelRuntime:
         self.model = dict(self.meta["model"])
         self.history = self.artifact["historical"]
         self.history_by_id = {item["id"]: item for item in self.history}
-        self.encoder = FeatureEncoder(self.history)
-        self.features = self.encoder.transform(self.history)
         self.targets = np.asarray([float(item["normalizedDemand"]) for item in self.history])
+        self.demand_pipeline = fit_demand_pipeline(
+            self.history,
+            self.targets,
+            float(self.model["ridgeAlpha"]),
+        )
 
     def recommend(self, payload: RecommendationRequest) -> dict:
         item = payload.product.model_dump(exclude={"visualSimilarities"})
@@ -204,8 +207,7 @@ class ModelRuntime:
             self.history,
             matches,
             self.targets,
-            self.encoder,
-            self.features,
+            self.demand_pipeline,
             model,
         )
         scale = float(self.model["targetSellThrough"]) / payload.settings.targetSellThrough

@@ -7,9 +7,15 @@ from datetime import datetime, timezone
 from typing import Any, Iterable
 
 import numpy as np
+from sklearn.feature_extraction import DictVectorizer
+from sklearn.linear_model import Ridge
+from sklearn.metrics import mean_absolute_error
+from sklearn.model_selection import LeaveOneOut, ParameterGrid
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 
-MODEL_VERSION = "2.1.0"
+MODEL_VERSION = "2.2.0"
 DEFAULT_TARGET_SELL_THROUGH = 0.70
 PACK_SIZE = 25
 MIN_BUY = 100
@@ -203,63 +209,49 @@ def combined_similarity(attribute: float, visual: float | None, attribute_weight
     return attribute * attribute_weight + visual * (1.0 - attribute_weight)
 
 
-class FeatureEncoder:
-    fields = ("itemType", "sleeve", "provision", "pattern", "fit", "fashion", "colour")
+def demand_features(item: dict[str, Any]) -> dict[str, float]:
+    """Create domain features; sklearn owns vocabulary, scaling and regression."""
 
-    def __init__(self, history: list[dict[str, Any]]):
-        self.categories: dict[str, list[str]] = {}
-        for field in self.fields:
-            if field == "pattern":
-                values = {PATTERN_FAMILY.get(norm(item.get(field)), norm(item.get(field))) for item in history}
-            elif field == "colour":
-                values = {COLOUR_FAMILY.get(norm(item.get(field)), norm(item.get(field))) for item in history}
-            else:
-                values = {norm(item.get(field)) for item in history}
-            self.categories[field] = sorted(values)
-        fabric_counts: dict[str, int] = {}
-        for item in history:
-            for token in token_set(item.get("fabric")):
-                fabric_counts[token] = fabric_counts.get(token, 0) + 1
-        self.fabric_tokens = sorted(token for token, count in fabric_counts.items() if count >= 2)
-        prices = np.log([max(float(item.get("mrp") or 1), 1) for item in history])
-        self.price_mean = float(prices.mean())
-        self.price_scale = float(prices.std()) or 1.0
-
-    def transform_one(self, item: dict[str, Any]) -> list[float]:
-        values: list[float] = []
-        for field in self.fields:
-            raw = norm(item.get(field))
-            if field == "pattern":
-                raw = PATTERN_FAMILY.get(raw, raw)
-            elif field == "colour":
-                raw = COLOUR_FAMILY.get(raw, raw)
-            categories = self.categories[field]
-            values.extend(1.0 if raw == category else 0.0 for category in categories)
-            values.append(1.0 if raw not in categories else 0.0)
-        fabric = token_set(item.get("fabric"))
-        values.extend(1.0 if token in fabric else 0.0 for token in self.fabric_tokens)
-        price = math.log(max(float(item.get("mrp") or 1), 1))
-        values.append((price - self.price_mean) / self.price_scale)
-        lifecycle = norm(item.get("lifecycle"))
-        values.extend([1.0 if lifecycle.startswith("SS") else 0.0, 1.0 if lifecycle.startswith("AW") else 0.0])
-        return values
-
-    def transform(self, items: list[dict[str, Any]]) -> np.ndarray:
-        return np.asarray([self.transform_one(item) for item in items], dtype=np.float64)
+    pattern = norm(item.get("pattern"))
+    colour = norm(item.get("colour"))
+    lifecycle = norm(item.get("lifecycle"))
+    season_family = "SS" if lifecycle.startswith("SS") else "AW" if lifecycle.startswith("AW") else lifecycle
+    categorical_values = {
+        "item_type": norm(item.get("itemType")),
+        "sleeve": norm(item.get("sleeve")),
+        "provision": norm(item.get("provision")),
+        "pattern": PATTERN_FAMILY.get(pattern, pattern),
+        "range": canonical_plus(item.get("range")),
+        "fit": norm(item.get("fit")),
+        "fashion": norm(item.get("fashion")),
+        "colour": COLOUR_FAMILY.get(colour, colour),
+        "season": season_family,
+    }
+    features = {
+        f"{field}={value or 'UNKNOWN'}": 1.0
+        for field, value in categorical_values.items()
+    }
+    features.update({f"fabric={token}": 1.0 for token in token_set(item.get("fabric"))})
+    features["log_mrp"] = math.log(max(float(item.get("mrp") or 1), 1))
+    return features
 
 
-def ridge_predict(train_x: np.ndarray, train_y: np.ndarray, test_x: np.ndarray, alpha: float) -> np.ndarray:
-    means = train_x.mean(axis=0)
-    scales = train_x.std(axis=0)
-    scales[scales < 1e-8] = 1.0
-    x = (train_x - means) / scales
-    tx = (test_x - means) / scales
-    design = np.column_stack([np.ones(len(x)), x])
-    test_design = np.column_stack([np.ones(len(tx)), tx])
-    penalty = np.eye(design.shape[1]) * alpha
-    penalty[0, 0] = 0.0
-    coefficients = np.linalg.pinv(design.T @ design + penalty) @ design.T @ train_y
-    return test_design @ coefficients
+def build_demand_pipeline(alpha: float) -> Pipeline:
+    return Pipeline([
+        ("features", DictVectorizer(sparse=True)),
+        ("scale", StandardScaler(with_mean=False)),
+        ("ridge", Ridge(alpha=alpha, solver="lsqr")),
+    ])
+
+
+def fit_demand_pipeline(
+    items: list[dict[str, Any]],
+    targets: np.ndarray,
+    alpha: float,
+) -> Pipeline:
+    pipeline = build_demand_pipeline(alpha)
+    pipeline.fit([demand_features(item) for item in items], targets)
+    return pipeline
 
 
 def analogue_prediction(
@@ -301,53 +293,70 @@ def backtest_model(
     visual_matrix: np.ndarray,
     targets: np.ndarray,
 ) -> dict[str, Any]:
-    encoder = FeatureEncoder(history)
-    features = encoder.transform(history)
-    candidate_alphas = (1.0, 10.0, 50.0)
+    candidate_alphas = (0.1, 1.0, 10.0, 100.0)
     ridge_by_alpha: dict[float, np.ndarray] = {}
-    all_indices = list(range(len(history)))
+    leave_one_out = LeaveOneOut()
+    all_indices = np.arange(len(history))
     for alpha in candidate_alphas:
-        predictions = []
-        for holdout in all_indices:
-            train = [index for index in all_indices if index != holdout]
-            prediction = ridge_predict(features[train], targets[train], features[[holdout]], alpha)[0]
-            predictions.append(float(prediction))
-        ridge_by_alpha[alpha] = np.asarray(predictions)
+        predictions = np.empty(len(history), dtype=np.float64)
+        for train_indices, holdout_indices in leave_one_out.split(history):
+            train_items = [history[int(index)] for index in train_indices]
+            holdout_items = [history[int(index)] for index in holdout_indices]
+            pipeline = fit_demand_pipeline(train_items, targets[train_indices], alpha)
+            predictions[holdout_indices] = pipeline.predict(
+                [demand_features(item) for item in holdout_items]
+            )
+        ridge_by_alpha[alpha] = predictions
 
     best: dict[str, Any] | None = None
-    for attribute_weight in (0.40, 0.50, 0.60, 0.70, 0.80):
-        for top_k in (3, 5, 8):
-            analogue = []
-            for holdout in all_indices:
-                candidates = [index for index in all_indices if index != holdout]
-                prediction, _ = analogue_prediction(
-                    holdout,
-                    candidates,
-                    targets,
-                    attribute_matrix,
-                    visual_matrix,
-                    attribute_weight,
-                    top_k,
-                )
-                analogue.append(prediction)
-            analogue_array = np.asarray(analogue)
-            for alpha, ridge in ridge_by_alpha.items():
-                for regression_blend in (0.15, 0.25, 0.35, 0.50):
-                    ensemble = analogue_array * (1 - regression_blend) + ridge * regression_blend
-                    score = wape(targets, ensemble)
-                    candidate = {
-                        "attributeWeight": attribute_weight,
-                        "visualWeight": 1 - attribute_weight,
-                        "topK": top_k,
-                        "ridgeAlpha": alpha,
-                        "regressionBlend": regression_blend,
-                        "analoguePredictions": analogue_array,
-                        "ridgePredictions": ridge,
-                        "predictions": ensemble,
-                        "score": score,
-                    }
-                    if best is None or score < best["score"]:
-                        best = candidate
+    attribute_weights = [round(value / 10, 1) for value in range(1, 10)]
+    analogue_predictions: dict[tuple[float, int], np.ndarray] = {}
+    for config in ParameterGrid({"attributeWeight": attribute_weights, "topK": [3, 5, 8]}):
+        attribute_weight = float(config["attributeWeight"])
+        top_k = int(config["topK"])
+        predictions = []
+        for holdout in all_indices:
+            candidates = [int(index) for index in all_indices if index != holdout]
+            prediction, _ = analogue_prediction(
+                int(holdout),
+                candidates,
+                targets,
+                attribute_matrix,
+                visual_matrix,
+                attribute_weight,
+                top_k,
+            )
+            predictions.append(prediction)
+        analogue_predictions[(attribute_weight, top_k)] = np.asarray(predictions)
+
+    search = ParameterGrid({
+        "attributeWeight": attribute_weights,
+        "regressionBlend": [0.15, 0.25, 0.35, 0.50],
+        "ridgeAlpha": list(candidate_alphas),
+        "topK": [3, 5, 8],
+    })
+    for config in search:
+        attribute_weight = float(config["attributeWeight"])
+        top_k = int(config["topK"])
+        alpha = float(config["ridgeAlpha"])
+        regression_blend = float(config["regressionBlend"])
+        analogue = analogue_predictions[(attribute_weight, top_k)]
+        ridge = ridge_by_alpha[alpha]
+        ensemble = analogue * (1 - regression_blend) + ridge * regression_blend
+        score = wape(targets, ensemble)
+        candidate = {
+            "attributeWeight": attribute_weight,
+            "visualWeight": 1 - attribute_weight,
+            "topK": top_k,
+            "ridgeAlpha": alpha,
+            "regressionBlend": regression_blend,
+            "analoguePredictions": analogue,
+            "ridgePredictions": ridge,
+            "predictions": ensemble,
+            "score": score,
+        }
+        if best is None or score < best["score"]:
+            best = candidate
 
     assert best is not None
     predictions = np.asarray(best["predictions"])
@@ -355,6 +364,7 @@ def backtest_model(
     interval = finite_sample_quantile(residuals, coverage=0.80)
     bias = float((predictions - targets).sum() / max(targets.sum(), 1e-9))
     coverage = float(np.mean(residuals <= interval))
+    demand_pipeline = fit_demand_pipeline(history, targets, float(best["ridgeAlpha"]))
     return {
         **{key: value for key, value in best.items() if not isinstance(value, np.ndarray)},
         "predictions": predictions,
@@ -362,12 +372,11 @@ def backtest_model(
         "conformalHalfWidth": interval,
         "metrics": {
             "wape": round(wape(targets, predictions), 4),
-            "mae": round(float(np.mean(residuals)), 1),
+            "mae": round(float(mean_absolute_error(targets, predictions)), 1),
             "bias": round(bias, 4),
             "intervalCoverage": round(coverage, 4),
         },
-        "encoder": encoder,
-        "features": features,
+        "demandPipeline": demand_pipeline,
     }
 
 
@@ -393,8 +402,7 @@ def recommend_one(
     history: list[dict[str, Any]],
     matches: list[dict[str, Any]],
     targets: np.ndarray,
-    encoder: FeatureEncoder,
-    features: np.ndarray,
+    demand_pipeline: Pipeline,
     model: dict[str, Any],
 ) -> dict[str, Any]:
     top_k = int(model["topK"])
@@ -403,8 +411,7 @@ def recommend_one(
     history_index = {historical["id"]: index for index, historical in enumerate(history)}
     selected_targets = np.asarray([targets[history_index[match["historicalId"]]] for match in selected])
     analogue = float(np.average(selected_targets, weights=weights))
-    item_features = encoder.transform([item])
-    regression = float(ridge_predict(features, targets, item_features, float(model["ridgeAlpha"]))[0])
+    regression = float(demand_pipeline.predict([demand_features(item)])[0])
     regression = clamp(regression, MIN_BUY, MAX_BUY)
     blend = float(model["regressionBlend"])
     raw = analogue * (1 - blend) + regression * blend
@@ -485,8 +492,7 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
             history,
             matches,
             targets,
-            fitted["encoder"],
-            fitted["features"],
+            fitted["demandPipeline"],
             fitted,
         )
         item["modelFlags"] = ["missing_image"] if matches and matches[0]["visualScore"] is None else []
@@ -517,7 +523,11 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
             "status": "Pilot validated — production architecture",
             "trainingRows": count,
             "targetSellThrough": DEFAULT_TARGET_SELL_THROUGH,
-            "algorithm": "Calibrated FashionCLIP retrieval + regularized demand ensemble",
+            "algorithm": "Calibrated FashionCLIP retrieval + scikit-learn Ridge demand ensemble",
+            "demandLibrary": "scikit-learn",
+            "demandPipeline": "DictVectorizer + StandardScaler + Ridge",
+            "modelSelection": "LeaveOneOut + ParameterGrid",
+            "attributeWeightGrid": [round(value / 10, 1) for value in range(1, 10)],
             "attributeWeight": round(attribute_weight, 2),
             "visualWeight": round(1 - attribute_weight, 2),
             "topK": int(fitted["topK"]),

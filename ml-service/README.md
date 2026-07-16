@@ -2,11 +2,11 @@
 
 This directory contains two related runtimes:
 
-- a fitted v2.1 pilot that serves the local sample artifact; and
+- a fitted v2.2 pilot that serves the local sample artifact; and
 - a v3 scale architecture for PostgreSQL/pgvector retrieval, learned ranking,
   quantile demand forecasting, constrained ordering, jobs and feedback.
 
-The v2.1 pilot is active and reproducible. The v3 software path is implemented,
+The v2.2 pilot is active and reproducible. The v3 software path is implemented,
 but production model artifacts and a populated client catalogue are not present.
 
 ## Status at a glance
@@ -15,8 +15,8 @@ but production model artifacts and a populated client catalogue are not present.
 |---|---|---|---|
 | FashionCLIP batch image embeddings | Implemented | Embeddings generated for 33 historical and 164 upcoming images with the base fashion-domain checkpoint | Yes, precomputed |
 | Attribute similarity | Implemented | Fixed explainable weights | Yes |
-| Hybrid analogue retrieval | Implemented | Current default 80% attributes / 20% FashionCLIP, top 8 | Yes |
-| Pilot demand ensemble | Implemented | Fitted on 33 outcomes with leave-one-out validation | Yes |
+| Hybrid analogue retrieval | Implemented | Current default 30% attributes / 70% FashionCLIP, top 3 | Yes |
+| Pilot demand ensemble | Implemented | scikit-learn Pipeline fitted on 33 outcomes with leave-one-out validation | Yes |
 | Conformal uncertainty and pilot buy limits | Implemented | Calibrated from out-of-fold residuals | Yes |
 | v1 sample API | Implemented and tested | Loads `app/generated-data.json` | Optional; browser does not require it |
 | FashionCLIP HTTP embedding service | Implemented | Public base model works for integration; client-tuned checkpoint absent | No |
@@ -31,7 +31,7 @@ but production model artifacts and a populated client catalogue are not present.
 
 | Field | Value |
 |---|---|
-| Model version | 2.1.0 |
+| Model version | 2.2.0 |
 | Training outcomes | 33 historical items |
 | Upcoming catalogue | 167 items |
 | Image coverage | 33/33 historical; 164/167 upcoming |
@@ -39,13 +39,13 @@ but production model artifacts and a populated client catalogue are not present.
 | Checkpoint revision | `7e3ba62ce16b379a1ab479346b66f192e76f51b7` |
 | Image representation | 512D unit-normalized FashionCLIP vectors |
 | Visual comparison | Cosine distance with robust logistic calibration |
-| Hybrid retrieval | 80% attribute + 20% visual; top 8 |
-| Demand ensemble | 65% analogue + 35% ridge regression |
+| Hybrid retrieval | 30% attribute + 70% visual; top 3 |
+| Demand ensemble | 50% analogue + 50% scikit-learn Ridge; alpha 10 |
 | Target sell-through | 70% |
 | Evaluation | Leave-one-out; temporal holdout unavailable |
 | WAPE | 40.59% |
 | MAE | 168.7 units |
-| Bias | +9.45% |
+| Bias | +3.07% |
 | Interval | Finite-sample 80% conformal; 87.88% empirical coverage |
 | Pilot order limits | 25-unit pack; 100 minimum; 2,000 maximum |
 
@@ -70,11 +70,12 @@ double-count structured commercial information.
 | Colour | 9% | Exact or mapped colour-family similarity |
 | Price | 11% | Smooth log-price distance |
 
-The current training search tests attribute weights from 40% through 80%,
-neighbour counts of 3, 5 and 8, ridge penalties of 1, 10 and 50, and regression
-blends of 15%, 25%, 35% and 50%. The winning 80% attribute weight is at the edge
-of the tested similarity grid. It therefore remains a pilot default and requires
-wider, nested temporal validation before production.
+The current training search uses scikit-learn `ParameterGrid` and
+`LeaveOneOut`. It tests attribute weights from 10% through 90%, neighbour counts
+of 3, 5 and 8, Ridge penalties of 0.1, 1, 10 and 100, and regression blends of
+15%, 25%, 35% and 50%. It selected 30% attributes / 70% vision, top 3, alpha 10,
+and a 50/50 demand blend. These remain pilot defaults and require nested temporal
+validation before production.
 
 ### Demand and risk logic
 
@@ -82,7 +83,9 @@ wider, nested temporal validation before production.
 - The demand target is winsorized to 45%–150% of the strongest available supply
   observation to contain inconsistent sample rows.
 - Top analogue demands are averaged with squared hybrid-similarity weights.
-- Ridge regression supplies a regularized multivariate baseline.
+- A scikit-learn `DictVectorizer` → `StandardScaler` → `Ridge` Pipeline supplies
+  the regularized multivariate baseline. Preprocessing and fitting occur inside
+  every validation fold; there is no handwritten matrix inversion.
 - Absolute out-of-fold residuals produce a finite-sample conformal interval.
 - Similarity, uncertainty and historical data-quality issues determine the
   confidence label.
@@ -105,7 +108,8 @@ HF_HOME=.model-cache PYTHON=.venv/bin/python ./ml-service/tools/build_fashion_cl
 FashionCLIP vectors, writes historical-to-historical and
 upcoming-to-historical cosine distances, and records model provenance.
 `train_and_export.py` then calibrates visual distance, performs leave-one-out
-model selection and atomically refreshes `app/generated-data.json`.
+model selection with scikit-learn and atomically refreshes
+`app/generated-data.json`.
 
 The batch builder is appropriate for this 200-item sample. It intentionally does
 an all-pairs comparison and is not the 200,000–500,000 item retrieval path.
@@ -227,5 +231,6 @@ From the repository root:
 .venv/bin/python -m pytest -q ml-service/tests
 ```
 
-The current suite has 10 tests covering pilot model behavior, artifact contract,
-vector validation, ranking, quantiles, optimization and MinTrace coherence.
+The current suite has 11 tests covering pilot model behavior, the scikit-learn
+pipeline, artifact contract, vector validation, ranking, quantiles, optimization
+and MinTrace coherence.
