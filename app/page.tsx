@@ -687,6 +687,10 @@ function App() {
                   <span className="queue-copy">
                     <strong>{item.id}</strong>
                     <small>{item.pattern} · {item.colour}</small>
+                    <span className="queue-commercial">
+                      <span>{item.fit}</span>
+                      <b>{moneyFormatter.format(item.mrp)}</b>
+                    </span>
                     <span className="mini-signals">
                       <span className={`mini-confidence ${itemDecision.matchConfidence.toLowerCase()}`}>
                         {itemDecision.matchConfidence} match
@@ -733,10 +737,38 @@ function App() {
                 <ProductImage src={selected.imageUrl} alt={`Upcoming ${selected.id}`} className="hero-product-image" eager />
                 <div className="product-specs">
                   <div><small>MRP</small><strong>{moneyFormatter.format(selected.mrp)}</strong></div>
+                  <div><small>Category</small><strong>{selected.itemType}</strong></div>
                   <div><small>Sleeve</small><strong>{selected.sleeve}</strong></div>
                   <div><small>Fit code</small><strong>{selected.provision}</strong></div>
+                  <div><small>Collection / fit</small><strong>{selected.fit}</strong></div>
                   <div><small>Lifecycle</small><strong>{selected.lifecycle}</strong></div>
                 </div>
+                <details className="product-details">
+                  <summary>
+                    <span>View all product details</span>
+                    <small>Source catalog fields</small>
+                  </summary>
+                  <dl className="product-details-grid">
+                    <div><dt>Product category</dt><dd>{selected.itemType}</dd></div>
+                    <div><dt>Style number</dt><dd>{selected.style}</dd></div>
+                    <div><dt>Colour variant code</dt><dd>{selected.colourCode}</dd></div>
+                    <div><dt>Pattern</dt><dd>{selected.pattern}</dd></div>
+                    <div><dt>Collection / fit</dt><dd>{selected.fit}</dd></div>
+                    <div><dt>Fabric</dt><dd>{selected.fabric}</dd></div>
+                    <div><dt>Colour name</dt><dd>{selected.colour}</dd></div>
+                    <div><dt>Sleeve code</dt><dd>{selected.sleeve}</dd></div>
+                    <div><dt>Provision / fit code</dt><dd>{selected.provision}</dd></div>
+                    <div><dt>Lifecycle</dt><dd>{selected.lifecycle}</dd></div>
+                    {selected.fashion.trim().toUpperCase() !== "FASHION" && (
+                      <div><dt>Merch type</dt><dd>{selected.fashion}</dd></div>
+                    )}
+                    <div>
+                      <dt>Image status</dt>
+                      <dd>{selected.hasVisualFeature ? "FashionCLIP ready" : "Attribute-only match"}</dd>
+                    </div>
+                  </dl>
+                  <p>Constant range codes are intentionally hidden because they do not help distinguish products.</p>
+                </details>
               </article>
 
               <article className="recommendation-card">

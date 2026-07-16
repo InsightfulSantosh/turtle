@@ -124,8 +124,10 @@ flags these issues and constrains their effect rather than silently trusting the
 
 ## User experience
 
-- Upcoming product queue with image, attribute, match-confidence and
-  demand-uncertainty filters
+- Upcoming product queue with image, pattern/colour, collection/fit, MRP,
+  recommended buy, match-confidence and demand-uncertainty signals
+- Expandable selected-style specification with catalog identifiers, all useful
+  attributes and image-model readiness; constant range codes stay hidden
 - Side-by-side upcoming and historical product images
 - Ranked analogue cards with combined, attribute and FashionCLIP evidence
 - Top 3, 5 or 8 analogue scenarios; every selected analogue is displayed and

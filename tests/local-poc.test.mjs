@@ -54,10 +54,17 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.match(pageSource, /Exact match/);
   assert.match(pageSource, /Upcoming/);
   assert.match(pageSource, /Historical/);
+  assert.match(pageSource, /View all product details/);
+  assert.match(pageSource, /Colour variant code/);
+  assert.match(pageSource, /FashionCLIP ready/);
+  assert.match(pageSource, /Constant range codes are intentionally hidden/);
+  assert.match(pageSource, /queue-commercial/);
   assert.match(stylesSource, /\.match-reasons\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
   assert.match(stylesSource, /\.match-reasons span\s*\{[^}]*border-radius:\s*7px/s);
   assert.match(stylesSource, /\.hero-product-image\s*\{[^}]*object-fit:\s*contain/s);
   assert.match(stylesSource, /\.match-image\s*\{[^}]*height:\s*320px[^}]*object-fit:\s*contain/s);
   assert.match(stylesSource, /\.recommendation-metrics\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
   assert.match(stylesSource, /\.recommendation-metrics small,[^}]*overflow-wrap:\s*anywhere/s);
+  assert.match(stylesSource, /\.queue-commercial\s*\{[^}]*justify-content:\s*space-between/s);
+  assert.match(stylesSource, /\.product-details-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
 });
