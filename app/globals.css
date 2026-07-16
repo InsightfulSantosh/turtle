@@ -1281,22 +1281,6 @@ select {
   background: var(--lime);
 }
 
-.match-evidence-link {
-  align-items: center;
-  color: var(--forest-2);
-  display: flex;
-  font-size: 7px;
-  font-weight: 900;
-  justify-content: space-between;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
-.match-evidence-link i {
-  font-size: 11px;
-  font-style: normal;
-}
-
 .match-card-catalog {
   padding: 0 10px 10px;
 }

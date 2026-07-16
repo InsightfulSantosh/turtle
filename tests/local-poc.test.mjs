@@ -54,7 +54,7 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.doesNotMatch(pageSource, /9 of 9 shown/);
   assert.match(pageSource, /match-card-select/);
   assert.match(pageSource, /Select \$\{historical\.id\} for match evidence/);
-  assert.match(pageSource, /View match evidence/);
+  assert.doesNotMatch(pageSource, /View match evidence/);
   assert.doesNotMatch(pageSource, /Strong attribute matches/);
   assert.match(pageSource, /Both catalogs show the same four primary fields/);
   assert.match(pageSource, /attributeValueReaders/);

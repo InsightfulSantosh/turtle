@@ -896,7 +896,6 @@ function App() {
                             <span><i style={{ width: `${match.attributeScore * 100}%` }} /></span>
                             <span><i style={{ width: `${(match.visualScore ?? 0) * 100}%` }} /></span>
                           </div>
-                          <span className="match-evidence-link">View match evidence <i aria-hidden="true">→</i></span>
                         </div>
                       </button>
                       <div className="match-card-catalog">
