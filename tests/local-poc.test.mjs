@@ -34,6 +34,9 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.match(pageSource, /Demand uncertainty/);
   assert.match(pageSource, /Top historical analogue/);
   assert.match(pageSource, /Analogue-based demand/);
+  assert.match(pageSource, /Top attribute drivers/);
+  assert.match(pageSource, /matchDriverSummary/);
+  assert.match(pageSource, /all \{Object\.keys\(focusedMatch\.attributeBreakdown\)\.length\} attribute scores/);
   assert.match(stylesSource, /\.recommendation-metrics\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
   assert.match(stylesSource, /\.recommendation-metrics small,[^}]*overflow-wrap:\s*anywhere/s);
 });

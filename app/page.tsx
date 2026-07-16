@@ -168,6 +168,19 @@ const attributeLabels: Record<string, string> = {
   price: "Price band",
 };
 
+const attributeDriverPriority = [
+  "pattern",
+  "fabric",
+  "colour",
+  "range",
+  "fit",
+  "fashion",
+  "price",
+  "sleeve",
+  "provision",
+  "category",
+];
+
 function clamp(value: number, minimum: number, maximum: number) {
   return Math.max(minimum, Math.min(maximum, value));
 }
@@ -363,12 +376,20 @@ function ScoreRing({ score, label }: { score: number; label: string }) {
   );
 }
 
-function bestReasons(match: RankedMatch) {
-  return Object.entries(match.attributeBreakdown)
+function matchDriverSummary(match: RankedMatch) {
+  const strongDrivers = Object.entries(match.attributeBreakdown)
     .filter(([, value]) => value >= 0.62)
-    .sort((left, right) => right[1] - left[1])
-    .slice(0, 3)
-    .map(([key]) => attributeLabels[key] ?? key);
+    .sort(([leftKey, leftScore], [rightKey, rightScore]) => (
+      rightScore - leftScore
+      || attributeDriverPriority.indexOf(leftKey) - attributeDriverPriority.indexOf(rightKey)
+    ))
+    .map(([key, score]) => ({ key, score, label: attributeLabels[key] ?? key }));
+
+  return {
+    visible: strongDrivers.slice(0, 4),
+    remaining: Math.max(strongDrivers.length - 4, 0),
+    total: strongDrivers.length,
+  };
 }
 
 function App() {
@@ -763,6 +784,7 @@ function App() {
                 {selectedMatches.map((match, index) => {
                   const historical = historyById.get(match.historicalId);
                   if (!historical) return null;
+                  const driverSummary = matchDriverSummary(match);
                   return (
                     <button
                       key={match.historicalId}
@@ -778,7 +800,16 @@ function App() {
                           <span><i style={{ width: `${match.attributeScore * 100}%` }} /></span>
                           <span><i style={{ width: `${(match.visualScore ?? 0) * 100}%` }} /></span>
                         </div>
-                        <div className="match-reasons">{bestReasons(match).map((reason) => <span key={reason}>{reason}</span>)}</div>
+                        <small className="match-reasons-label">Top attribute drivers</small>
+                        <div
+                          className="match-reasons"
+                          aria-label={`${driverSummary.total} strong attribute matches. Select this analogue to inspect every attribute score.`}
+                        >
+                          {driverSummary.visible.map(({ key, label, score }) => (
+                            <span key={key} title={`${label}: ${scorePercent(score)}`}>{label} {scorePercent(score)}</span>
+                          ))}
+                          {driverSummary.remaining > 0 && <span className="more">+{driverSummary.remaining} more</span>}
+                        </div>
                         <div className="match-performance">
                           <span><small>Order</small>{numberFormatter.format(historical.order)}</span>
                           <span><small>Sell-through</small>{scorePercent(historical.sellThrough)}</span>
@@ -795,7 +826,7 @@ function App() {
                 <div className="evidence-intro">
                   <span className="eyebrow">Match evidence</span>
                   <h2>{selected.id} ↔ {focusedHistory.id}</h2>
-                  <p>Component scores show exactly what drove the recommendation. Select any of the {topK} included analogues above to inspect its evidence.</p>
+                  <p>Each card summarizes four prioritized drivers; all {Object.keys(focusedMatch.attributeBreakdown).length} attribute scores are shown here. Select any of the {topK} included analogues above to inspect its complete evidence.</p>
                 </div>
                 <div className="evidence-scores">
                   <ScoreRing score={focusedMatch.combinedScore} label="Combined" />

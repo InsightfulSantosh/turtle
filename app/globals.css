@@ -1190,12 +1190,28 @@ select {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  min-height: 21px;
+  min-height: 48px;
 }
 
 .match-reasons span {
   font-size: 7px;
+  line-height: 1.25;
   padding: 4px 5px;
+}
+
+.match-copy > .match-reasons-label {
+  color: var(--forest-2);
+  font-size: 7px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  margin: 0 0 5px;
+  text-transform: uppercase;
+}
+
+.match-reasons .more {
+  background: var(--forest);
+  border-color: var(--forest);
+  color: var(--white);
 }
 
 .match-performance {
