@@ -78,7 +78,7 @@ type UpcomingItem = {
 
 type ComparableProduct = Pick<UpcomingItem,
   "itemType" | "sleeve" | "provision" | "pattern" | "lifecycle" |
-  "fit" | "fabric" | "fashion" | "colour" | "mrp"
+  "fit" | "fabric" | "colour" | "mrp"
 >;
 
 type Dataset = {
@@ -94,6 +94,34 @@ type Dataset = {
     matchConfidenceCounts: Record<Confidence, number>;
     demandUncertaintyCounts: Record<DemandUncertainty, number>;
     visualMethod: string;
+    attributeAudit: {
+      historicalSourceRange: string;
+      upcomingSourceRange: string;
+      activeCount: number;
+      policy: string;
+      activeAttributes: Array<{
+        key: string;
+        label: string;
+        historicalColumn: string;
+        upcomingColumn: string;
+        weight: number;
+        historicalUnique: number;
+        upcomingUnique: number;
+        method: string;
+      }>;
+      excludedConstants: Array<{
+        label: string;
+        historicalColumn: string;
+        upcomingColumn: string;
+        reason: string;
+      }>;
+      excludedNonComparisonFields: Array<{
+        label: string;
+        historicalColumn: string;
+        upcomingColumn: string;
+        reason: string;
+      }>;
+    };
     visionModel: {
       modelId: string;
       modelRevision: string | null;
@@ -111,6 +139,7 @@ type Dataset = {
       demandLibrary: string;
       demandPipeline: string;
       modelSelection: string;
+      attributeWeights: Record<string, number>;
       attributeWeightGrid: number[];
       attributeWeight: number;
       visualWeight: number;
@@ -175,7 +204,6 @@ const attributeValueReaders: Record<string, (item: ComparableProduct) => string>
   lifecycle: (item) => seasonFamily(item.lifecycle),
   fit: (item) => item.fit,
   fabric: (item) => item.fabric,
-  fashion: (item) => item.fashion,
   colour: (item) => item.colour,
   price: (item) => moneyFormatter.format(item.mrp),
 };
@@ -188,7 +216,6 @@ const attributeLabels: Record<string, string> = {
   lifecycle: "Season family",
   fit: "Collection",
   fabric: "Fabric",
-  fashion: "Merch type",
   colour: "Colour",
   price: "Price band",
 };
@@ -199,7 +226,6 @@ const attributeDriverPriority = [
   "colour",
   "lifecycle",
   "fit",
-  "fashion",
   "price",
   "sleeve",
   "provision",
@@ -973,13 +999,55 @@ function App() {
           </div>
           <div className="workflow-grid">
             {[
-              ["01", "Validate inputs", "Normalize identifiers and attributes, link images, and quarantine inconsistent order, dispatch, sales, and sell-through values."],
-              ["02", "Encode products", "Create structured attribute evidence and 512-dimensional FashionCLIP embeddings from garment images."],
+              ["01", "Audit inputs", "Map both workbook schemas, remove constant or non-comparable fields, link images, and quarantine inconsistent outcome values."],
+              ["02", "Encode products", "Create nine-field structured evidence and 512-dimensional FashionCLIP embeddings from garment images."],
               ["03", "Learn retrieval", "Use scikit-learn ParameterGrid and LeaveOneOut to tune attribute/vision weights, neighbour count, blend, and regularization."],
               ["04", "Predict demand", "Ensemble similarity-weighted analogue demand with a fitted DictVectorizer, StandardScaler, and Ridge pipeline."],
               ["05", "Separate evidence and risk", "Report analogue match confidence independently from conformal demand uncertainty, then apply pack and quantity limits."],
             ].map(([number, title, copy]) => <article key={number}><span>{number}</span><h3>{title}</h3><p>{copy}</p></article>)}
           </div>
+          <section className="attribute-audit-card">
+            <div className="attribute-audit-heading">
+              <div>
+                <span className="card-label">Workbook attribute audit</span>
+                <h2>{dataset.meta.attributeAudit.activeCount} informative fields retained</h2>
+                <p>{dataset.meta.attributeAudit.policy}</p>
+              </div>
+              <span className="audit-range">Historical {dataset.meta.attributeAudit.historicalSourceRange}<br />Upcoming {dataset.meta.attributeAudit.upcomingSourceRange}</span>
+            </div>
+            <div className="active-attribute-grid">
+              {dataset.meta.attributeAudit.activeAttributes.map((attribute) => (
+                <article key={attribute.key}>
+                  <div><b>{attribute.label}</b><strong>{scorePercent(attribute.weight)}</strong></div>
+                  <p>{attribute.historicalColumn} ↔ {attribute.upcomingColumn}</p>
+                  <small>{attribute.method}</small>
+                  <span>{attribute.historicalUnique} historical · {attribute.upcomingUnique} upcoming values</span>
+                </article>
+              ))}
+            </div>
+            <div className="excluded-attribute-row">
+              {dataset.meta.attributeAudit.excludedConstants.map((attribute) => (
+                <article key={attribute.label}>
+                  <span>Excluded constant</span>
+                  <b>{attribute.label}</b>
+                  <small>{attribute.historicalColumn} ↔ {attribute.upcomingColumn}</small>
+                  <p>{attribute.reason}</p>
+                </article>
+              ))}
+            </div>
+            <details className="excluded-field-details">
+              <summary>Why the other workbook columns are not similarity attributes</summary>
+              <div>
+                {dataset.meta.attributeAudit.excludedNonComparisonFields.map((field) => (
+                  <article key={field.label}>
+                    <b>{field.label}</b>
+                    <small>{field.historicalColumn} ↔ {field.upcomingColumn}</small>
+                    <p>{field.reason}</p>
+                  </article>
+                ))}
+              </div>
+            </details>
+          </section>
           <div className="method-columns">
             <article className="formula-card">
               <span className="card-label">Decision formula</span>

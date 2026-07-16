@@ -14,12 +14,17 @@ test("keeps the local POC and fitted model contract intact", async () => {
   ]);
   const artifact = JSON.parse(artifactText);
 
-  assert.equal(artifact.meta.model.version, "2.3.1");
+  assert.equal(artifact.meta.model.version, "2.3.2");
   assert.equal(artifact.meta.model.demandLibrary, "scikit-learn");
   assert.equal(artifact.meta.visionModel.modelId, "patrickjohncyh/fashion-clip");
-  assert.equal(artifact.meta.model.topK, 3);
-  assert.deepEqual(artifact.meta.matchConfidenceCounts, { High: 25, Medium: 122, Low: 20 });
-  assert.deepEqual(artifact.meta.demandUncertaintyCounts, { Narrow: 0, Moderate: 5, Wide: 162 });
+  assert.equal(artifact.meta.model.topK, 8);
+  assert.equal(Object.values(artifact.meta.matchConfidenceCounts).reduce((sum, value) => sum + value, 0), artifact.meta.upcomingItems);
+  assert.equal(Object.values(artifact.meta.demandUncertaintyCounts).reduce((sum, value) => sum + value, 0), artifact.meta.upcomingItems);
+  assert.equal(artifact.meta.attributeAudit.activeCount, 9);
+  assert.deepEqual(Object.keys(artifact.meta.model.attributeWeights), [
+    "category", "sleeve", "provision", "pattern", "lifecycle", "fit", "fabric", "colour", "price",
+  ]);
+  assert.deepEqual(artifact.meta.attributeAudit.excludedConstants.map(({ historicalColumn }) => historicalColumn), ["CAT2", "CAT5"]);
   assert.ok(artifact.upcoming.every(({ recommendation }) => (
     recommendation.confidence === recommendation.matchConfidence
     && ["Narrow", "Moderate", "Wide"].includes(recommendation.demandUncertainty)
@@ -30,7 +35,7 @@ test("keeps the local POC and fitted model contract intact", async () => {
     && recommendation.demandUncertainty === "Wide"
   )));
   assert.ok(artifact.upcoming.every(({ matches }) => matches.every(({ attributeBreakdown }) => (
-    "lifecycle" in attributeBreakdown && !("range" in attributeBreakdown)
+    "lifecycle" in attributeBreakdown && !("range" in attributeBreakdown) && !("fashion" in attributeBreakdown)
   ))));
   assert.match(pageSource, /FashionCLIP retrieval \+ scikit-learn demand model/);
   assert.match(pageSource, /Match confidence/);
@@ -43,6 +48,9 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.match(pageSource, /All \{Object\.keys\(focusedMatch\.attributeBreakdown\)\.length\} upcoming and historical attribute values/);
   assert.match(pageSource, /attributeValueReaders/);
   assert.match(pageSource, /Season family/);
+  assert.match(pageSource, /Workbook attribute audit/);
+  assert.match(pageSource, /informative fields retained/);
+  assert.match(pageSource, /Excluded constant/);
   assert.match(pageSource, /Exact match/);
   assert.match(pageSource, /Upcoming/);
   assert.match(pageSource, /Historical/);

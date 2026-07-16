@@ -15,7 +15,7 @@ external hosting or authentication platform.
 | Planner interface | Active locally | Compare products, inspect match evidence, run scenarios, review the portfolio and export CSV |
 | FashionCLIP image matching | Active in the POC | Real 512-dimensional embeddings from the supplied product images |
 | Attribute similarity | Active in the POC | Weighted category, pattern, fit, fabric, colour, price and related evidence |
-| Historical analogue retrieval | Active in the POC | All 33 historical products are scored; the validated default uses the top 3 |
+| Historical analogue retrieval | Active in the POC | All 33 historical products are scored; the validated default uses the top 8 |
 | Order recommendation | Active as a pilot | Analogue demand blended with a scikit-learn Ridge pipeline and uncertainty guardrails |
 | Sample Python API | Implemented and tested | Versioned v1 model and recommendation endpoints use the fitted POC artifact |
 | Scale platform | Code implemented, not production-activated | Requires a populated pgvector catalogue and approved trained model artifacts |
@@ -29,7 +29,7 @@ external hosting or authentication platform.
 | Historical image coverage | 33 / 33 |
 | Upcoming image coverage | 164 / 167 |
 | Missing upcoming images | 3 |
-| POC model version | 2.3.1 |
+| POC model version | 2.3.2 |
 | FashionCLIP dimension | 512 |
 
 The three upcoming items without a usable local image are
@@ -48,8 +48,8 @@ uses the generated artifact and does not need a live embedding service.
 2. Encode available product images with FashionCLIP and unit-normalize the
    resulting 512-dimensional vectors.
 3. Convert cosine distance into a calibrated visual-similarity score.
-4. Calculate explainable attribute similarity for every upcoming/historical
-   product pair.
+4. Calculate explainable similarity across nine informative, comparable
+   attributes for every upcoming/historical product pair.
 5. Combine attributes and FashionCLIP, rank historical analogues, and use the
    selected top products as demand evidence.
 6. Normalize historical sales to the target sell-through and contain anomalous
@@ -63,9 +63,9 @@ uses the generated artifact and does not need a live embedding service.
 
 | Setting | Default | Meaning |
 |---|---:|---|
-| Attribute weight | 30% | Structured commercial and product evidence |
-| FashionCLIP weight | 70% | Garment-image similarity |
-| Historical products used | 3 | Highest-ranked analogues included in the quantity calculation |
+| Attribute weight | 80% | Structured commercial and product evidence |
+| FashionCLIP weight | 20% | Garment-image similarity |
+| Historical products used | 8 | Highest-ranked analogues included in the quantity calculation |
 | Analogue forecast blend | 50% | Similarity-weighted historical demand |
 | Ridge forecast blend | 50% | Fitted scikit-learn multivariate demand baseline |
 | Target sell-through | 70% | Planning policy used to translate sales demand into inventory |
@@ -73,10 +73,19 @@ uses the generated artifact and does not need a live embedding service.
 `scikit-learn` performs the pilot model selection with `LeaveOneOut` and
 `ParameterGrid`. The search tests attribute weights from 10% to 90%, top 3/5/8
 analogues, Ridge penalties of 0.1/1/10/100, and regression blends of
-15%/25%/35%/50%. The selected 30/70 similarity blend, top 3, 50/50 demand blend,
+15%/25%/35%/50%. The selected 80/20 similarity blend, top 8, 50/50 demand blend,
 and Ridge alpha 10 are still pilot defaults because only 33 outcomes are
 available. Production selection requires nested temporal validation and
 planner-labelled relevance pairs.
+
+The workbook audit retains item type, sleeve, provision/fit code, pattern,
+lifecycle family, collection/fit, fabric, colour name and MRP. `CAT2` range is
+constant after normalizing `CMI + VMI` / `VMI + CMI`, and historical `CAT5`
+merch type is entirely `FASHION`; both are excluded from similarity and the
+pilot Ridge feature set. Identifiers, colour variant codes and historical demand
+outcomes are also kept out of similarity for semantic and leakage reasons. The
+Methodology screen exposes the source-column mapping, distinct-value counts,
+weights and exclusions.
 
 The interface allows live scenario changes to the similarity weights, target
 sell-through and analogue count. A custom scenario recalculates rankings and
@@ -87,22 +96,22 @@ default model; changing a control does not retrain the model.
 
 | Metric | Current result |
 |---|---:|
-| Leave-one-out WAPE | 40.57% |
-| Mean absolute error | 168.6 units |
-| Forecast bias | +3.08% |
+| Leave-one-out WAPE | 41.47% |
+| Mean absolute error | 172.3 units |
+| Forecast bias | +7.37% |
 | Empirical conformal interval coverage | 87.88% |
 | Conformal half-width before similarity adjustment | 325 units |
-| High match-confidence items | 25 |
-| Medium match-confidence items | 122 |
-| Low match-confidence items | 20 |
+| High match-confidence items | 12 |
+| Medium match-confidence items | 141 |
+| Low match-confidence items | 14 |
 | Narrow demand-uncertainty ranges | 0 |
-| Moderate demand-uncertainty ranges | 5 |
-| Wide demand-uncertainty ranges | 162 |
+| Moderate demand-uncertainty ranges | 0 |
+| Wide demand-uncertainty ranges | 167 |
 
 These results are evidence for a POC, not production certification. Leave-one-out
 validation is used because only 33 historical outcomes were supplied. A credible
 production assessment needs at least three clean seasons and a forward temporal
-holdout. Model v2.3.1 reports two deliberately separate signals: match confidence
+holdout. Model v2.3.2 reports two deliberately separate signals: match confidence
 describes the relevance and quality of the historical analogues, while demand
 uncertainty describes the conformal forecast half-width relative to the proposed
 buy. A product can therefore have a high-confidence match and a wide demand
@@ -187,7 +196,7 @@ Python model and scale components:
 .venv/bin/python -m pytest -q ml-service/tests
 ```
 
-The current suite contains 12 Python tests plus a local frontend/model-contract
+The current suite contains 14 Python tests plus a local frontend/model-contract
 test; `npm test` also performs a complete standard Next.js production build.
 
 ## Scale architecture status

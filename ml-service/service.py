@@ -177,6 +177,10 @@ class ModelRuntime:
         self.artifact = json.loads(path.read_text(encoding="utf-8"))
         self.meta = self.artifact["meta"]
         self.model = dict(self.meta["model"])
+        self.attribute_weights = {
+            str(name): float(weight)
+            for name, weight in self.model.get("attributeWeights", {}).items()
+        } or None
         self.history = self.artifact["historical"]
         self.history_by_id = {item["id"]: item for item in self.history}
         self.targets = np.asarray([float(item["normalizedDemand"]) for item in self.history])
@@ -191,7 +195,7 @@ class ModelRuntime:
         matches = []
         attribute_weight = float(self.model["attributeWeight"])
         for historical in self.history:
-            attribute, breakdown = attribute_similarity(item, historical)
+            attribute, breakdown = attribute_similarity(item, historical, self.attribute_weights)
             visual = payload.product.visualSimilarities.get(historical["id"])
             hybrid = combined_similarity(attribute, visual, attribute_weight)
             matches.append({

@@ -15,7 +15,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 
-MODEL_VERSION = "2.3.1"
+MODEL_VERSION = "2.3.2"
 DEFAULT_TARGET_SELL_THROUGH = 0.70
 PACK_SIZE = 25
 MIN_BUY = 100
@@ -59,26 +59,78 @@ COLOUR_FAMILY = {
     "LEMON": "YELLOW",
 }
 
-ATTRIBUTE_WEIGHTS = {
+BASE_ATTRIBUTE_WEIGHTS = {
     "category": 0.16,
     "sleeve": 0.07,
     "provision": 0.07,
-    "pattern": 0.16,
-    "lifecycle": 0.04,
+    "pattern": 0.17,
+    "lifecycle": 0.05,
     "fit": 0.14,
     "fabric": 0.14,
-    "fashion": 0.02,
     "colour": 0.09,
     "price": 0.11,
 }
 
+ATTRIBUTE_SCHEMA = {
+    "category": (
+        "Category / item type", "Item Type", "SEGMENT1",
+        "Exact match with a strong cross-category penalty",
+    ),
+    "sleeve": ("Sleeve", "SLEEVS", "SEGMENT5", "Exact categorical match"),
+    "provision": ("Provision / fit code", "PROV", "SEGMENT6", "Exact categorical match"),
+    "pattern": ("Pattern", "CAT1", "CAT1", "Exact or related pattern-family match"),
+    "lifecycle": ("Lifecycle family", "CAT6", "CAT6", "Normalized AW, SS, or CORE family match"),
+    "fit": ("Collection / fit", "CAT3", "CAT3", "Exact categorical match"),
+    "fabric": ("Fabric", "CAT4", "CAT4", "Exact or token-overlap match"),
+    "colour": ("Colour name", "COLOR_NAME", "COLOR", "Exact or related colour-family match"),
+    "price": ("MRP / price band", "MRP", "MRP", "Smooth log-price distance"),
+}
+
+EXCLUDED_CONSTANT_ATTRIBUTES = (
+    {
+        "label": "Range code",
+        "historicalColumn": "CAT2",
+        "upcomingColumn": "CAT2",
+        "reason": "Constant after normalization: CMI + VMI and VMI + CMI are the same range.",
+    },
+    {
+        "label": "Merch type",
+        "historicalColumn": "CAT5",
+        "upcomingColumn": "CAT5",
+        "reason": "All historical candidates are FASHION, so this field cannot rank one analogue above another.",
+    },
+)
+
+EXCLUDED_NON_COMPARISON_FIELDS = (
+    {
+        "label": "Identifiers",
+        "historicalColumn": "SL, CON, SORT",
+        "upcomingColumn": "CON, SEGMENT2",
+        "reason": "Row and style identifiers identify products; they are not reusable product characteristics.",
+    },
+    {
+        "label": "Colour variant code",
+        "historicalColumn": "COLOR",
+        "upcomingColumn": "SEGMENT3",
+        "reason": "Variant codes such as 1001 are not stable colour meanings; colour names are compared instead.",
+    },
+    {
+        "label": "Historical season label",
+        "historicalColumn": "SEASON",
+        "upcomingColumn": "—",
+        "reason": "There is no upcoming counterpart; the comparable CAT6 lifecycle family is used instead.",
+    },
+    {
+        "label": "Demand outcomes",
+        "historicalColumn": "ORDER, DISPATCH, SALE, SALE THRU",
+        "upcomingColumn": "—",
+        "reason": "These fields train and validate the quantity forecast; using them in product similarity would leak outcomes.",
+    },
+)
+
 
 def norm(value: Any) -> str:
     return " ".join(str(value or "").upper().split()).strip()
-
-
-def canonical_plus(value: Any) -> str:
-    return "+".join(sorted(part.strip() for part in norm(value).split("+")))
 
 
 def lifecycle_family(value: Any) -> str:
@@ -90,6 +142,92 @@ def lifecycle_family(value: Any) -> str:
     return lifecycle
 
 
+def attribute_value(item: dict[str, Any], name: str) -> Any:
+    if name == "category":
+        return norm(item.get("itemType"))
+    if name == "lifecycle":
+        return lifecycle_family(item.get("lifecycle"))
+    if name == "price":
+        return float(item.get("mrp") or 0)
+    source_key = {
+        "sleeve": "sleeve",
+        "provision": "provision",
+        "pattern": "pattern",
+        "fit": "fit",
+        "fabric": "fabric",
+        "colour": "colour",
+    }[name]
+    return norm(item.get(source_key))
+
+
+def populated_attribute_values(items: list[dict[str, Any]], name: str) -> set[Any]:
+    return {
+        value
+        for item in items
+        if (value := attribute_value(item, name)) not in ("", 0.0)
+    }
+
+
+def informative_attribute_weights(history: list[dict[str, Any]]) -> dict[str, float]:
+    """Drop fields that cannot distinguish historical candidates, then renormalize.
+
+    A field with fewer than two populated historical values is not allowed to
+    contribute a constant bonus to every match. This keeps future artifact
+    rebuilds safe when a newly supplied workbook contains another constant
+    field.
+    """
+
+    active = {
+        name: weight
+        for name, weight in BASE_ATTRIBUTE_WEIGHTS.items()
+        if len(populated_attribute_values(history, name)) > 1
+    }
+    total = sum(active.values())
+    if not active or total <= 0:
+        raise ValueError("No informative comparable attributes were found in the historical dataset")
+    return {name: weight / total for name, weight in active.items()}
+
+
+def attribute_audit(
+    history: list[dict[str, Any]],
+    upcoming: list[dict[str, Any]],
+    weights: dict[str, float],
+) -> dict[str, Any]:
+    active = []
+    for name, weight in weights.items():
+        label, historical_column, upcoming_column, method = ATTRIBUTE_SCHEMA[name]
+        historical_values = populated_attribute_values(history, name)
+        upcoming_values = populated_attribute_values(upcoming, name)
+        active.append({
+            "key": name,
+            "label": label,
+            "historicalColumn": historical_column,
+            "upcomingColumn": upcoming_column,
+            "weight": round(weight, 4),
+            "historicalUnique": len(historical_values),
+            "upcomingUnique": len(upcoming_values),
+            "method": method,
+        })
+    automatically_excluded = []
+    for name in sorted(BASE_ATTRIBUTE_WEIGHTS.keys() - weights.keys()):
+        label, historical_column, upcoming_column, _ = ATTRIBUTE_SCHEMA[name]
+        automatically_excluded.append({
+            "label": label,
+            "historicalColumn": historical_column,
+            "upcomingColumn": upcoming_column,
+            "reason": "Automatically excluded because the historical field has fewer than two populated values.",
+        })
+    return {
+        "historicalSourceRange": "Sheet1!A1:T34",
+        "upcomingSourceRange": "Sheet1!A1:N168",
+        "activeCount": len(active),
+        "activeAttributes": active,
+        "excludedConstants": [*EXCLUDED_CONSTANT_ATTRIBUTES, *automatically_excluded],
+        "excludedNonComparisonFields": list(EXCLUDED_NON_COMPARISON_FIELDS),
+        "policy": "Only comparable fields with at least two populated historical values can contribute to similarity.",
+    }
+
+
 def token_set(value: Any) -> set[str]:
     ignored = {"100%", "100", "PERCENT", "THE"}
     return {part for part in re.findall(r"[A-Z0-9]+", norm(value)) if part not in ignored}
@@ -98,14 +236,15 @@ def token_set(value: Any) -> set[str]:
 def jaccard(left: Any, right: Any) -> float:
     a, b = token_set(left), token_set(right)
     if not a and not b:
-        return 1.0
+        return 0.0
     if not a or not b:
         return 0.0
     return len(a & b) / len(a | b)
 
 
 def categorical(left: Any, right: Any) -> float:
-    return 1.0 if norm(left) == norm(right) else 0.0
+    a, b = norm(left), norm(right)
+    return 1.0 if a and a == b else 0.0
 
 
 def pattern_similarity(left: Any, right: Any) -> float:
@@ -124,7 +263,12 @@ def colour_similarity(left: Any, right: Any) -> float:
     return 0.66 if COLOUR_FAMILY.get(a, a) == COLOUR_FAMILY.get(b, b) else 0.0
 
 
-def attribute_similarity(left: dict[str, Any], right: dict[str, Any]) -> tuple[float, dict[str, float]]:
+def attribute_similarity(
+    left: dict[str, Any],
+    right: dict[str, Any],
+    weights: dict[str, float] | None = None,
+) -> tuple[float, dict[str, float]]:
+    active_weights = weights or BASE_ATTRIBUTE_WEIGHTS
     item_type = categorical(left.get("itemType"), right.get("itemType"))
     left_mrp = max(float(left.get("mrp") or 1), 1)
     right_mrp = max(float(right.get("mrp") or 1), 1)
@@ -139,11 +283,11 @@ def attribute_similarity(left: dict[str, Any], right: dict[str, Any]) -> tuple[f
         ),
         "fit": categorical(left.get("fit"), right.get("fit")),
         "fabric": max(categorical(left.get("fabric"), right.get("fabric")), jaccard(left.get("fabric"), right.get("fabric"))),
-        "fashion": categorical(left.get("fashion"), right.get("fashion")),
         "colour": colour_similarity(left.get("colour"), right.get("colour")),
         "price": math.exp(-abs(math.log(left_mrp / right_mrp)) / 0.30),
     }
-    score = sum(values[name] * weight for name, weight in ATTRIBUTE_WEIGHTS.items())
+    values = {name: values[name] for name in active_weights}
+    score = sum(values[name] * weight for name, weight in active_weights.items())
     if item_type == 0:
         score *= 0.42
     return round(score, 4), {name: round(value, 3) for name, value in values.items()}
@@ -232,9 +376,7 @@ def demand_features(item: dict[str, Any]) -> dict[str, float]:
         "sleeve": norm(item.get("sleeve")),
         "provision": norm(item.get("provision")),
         "pattern": PATTERN_FAMILY.get(pattern, pattern),
-        "range": canonical_plus(item.get("range")),
         "fit": norm(item.get("fit")),
-        "fashion": norm(item.get("fashion")),
         "colour": COLOUR_FAMILY.get(colour, colour),
         "season": season_family,
     }
@@ -462,6 +604,7 @@ def recommend_one(
 def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) -> dict[str, Any]:
     history = [dict(item) for item in source["historical"]]
     upcoming = [dict(item) for item in source["upcoming"]]
+    active_attribute_weights = informative_attribute_weights(history)
     rows = vision_output.get("distances", [])
     distance_map = {
         (str(row["leftId"]), str(row["rightId"])): float(row["distance"])
@@ -479,7 +622,7 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
     visual_matrix = np.full((count, count), np.nan, dtype=np.float64)
     for left_index, left in enumerate(history):
         for right_index, right in enumerate(history):
-            attribute, _ = attribute_similarity(left, right)
+            attribute, _ = attribute_similarity(left, right, active_attribute_weights)
             attribute_matrix[left_index, right_index] = attribute
             distance = distance_map.get((left["id"], right["id"]))
             visual = calibration.similarity(distance)
@@ -497,11 +640,13 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
     attribute_weight = float(fitted["attributeWeight"])
     match_confidence_counts = {"High": 0, "Medium": 0, "Low": 0}
     uncertainty_counts = {"Narrow": 0, "Moderate": 0, "Wide": 0}
+    all_attribute_scores: list[float] = []
     all_visual_scores: list[float] = []
     for item in upcoming:
         matches: list[dict[str, Any]] = []
         for historical in history:
-            attribute, breakdown = attribute_similarity(item, historical)
+            attribute, breakdown = attribute_similarity(item, historical, active_attribute_weights)
+            all_attribute_scores.append(attribute)
             visual = calibration.similarity(distance_map.get((item["id"], historical["id"])))
             if visual is not None:
                 all_visual_scores.append(visual)
@@ -539,8 +684,13 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
         "confidenceCounts": match_confidence_counts,
         "matchConfidenceCounts": match_confidence_counts,
         "demandUncertaintyCounts": uncertainty_counts,
+        "attributeScoreRange": (
+            [round(min(all_attribute_scores), 3), round(max(all_attribute_scores), 3)]
+            if all_attribute_scores else [0, 0]
+        ),
         "visualScoreRange": [round(min(all_visual_scores), 3), round(max(all_visual_scores), 3)] if all_visual_scores else [0, 0],
         "visualMethod": vision_output.get("engine", "FashionCLIP image embedding"),
+        "attributeAudit": attribute_audit(history, upcoming, active_attribute_weights),
         "visionModel": {
             "modelId": vision_output.get("modelId", "unknown"),
             "modelRevision": vision_output.get("modelRevision"),
@@ -558,6 +708,7 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
             "demandLibrary": "scikit-learn",
             "demandPipeline": "DictVectorizer + StandardScaler + Ridge",
             "modelSelection": "LeaveOneOut + ParameterGrid",
+            "attributeWeights": {name: round(weight, 4) for name, weight in active_attribute_weights.items()},
             "attributeWeightGrid": [round(value / 10, 1) for value in range(1, 10)],
             "attributeWeight": round(attribute_weight, 2),
             "visualWeight": round(1 - attribute_weight, 2),

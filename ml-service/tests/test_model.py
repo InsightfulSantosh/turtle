@@ -8,6 +8,7 @@ import numpy as np
 from season_intelligence.model import (
     attribute_similarity,
     calibrate_vision,
+    demand_features,
     demand_uncertainty,
     fit_demand_pipeline,
     match_confidence,
@@ -44,7 +45,7 @@ def test_category_mismatch_is_strongly_penalized() -> None:
     assert attribute_similarity(base, different)[0] < 0.5
 
 
-def test_constant_range_is_replaced_by_season_family() -> None:
+def test_constant_fields_are_removed_and_season_family_is_retained() -> None:
     left = {
         "itemType": "OTSH", "sleeve": "F", "provision": "SF", "pattern": "CHECKS",
         "range": "CMI + VMI", "lifecycle": "AW2026", "fit": "TAILORED",
@@ -55,8 +56,18 @@ def test_constant_range_is_replaced_by_season_family() -> None:
     _, same_breakdown = attribute_similarity(left, same_season)
     _, different_breakdown = attribute_similarity(left, different_season)
     assert "range" not in same_breakdown
+    assert "fashion" not in same_breakdown
     assert same_breakdown["lifecycle"] == 1.0
     assert different_breakdown["lifecycle"] == 0.0
+
+
+def test_constant_fields_are_not_sent_to_the_demand_pipeline() -> None:
+    features = demand_features({
+        "itemType": "OTSH", "range": "CMI + VMI", "fashion": "FASHION",
+        "lifecycle": "AW2026", "pattern": "CHECKS", "mrp": 1_899,
+    })
+    assert not any(name.startswith("range=") for name in features)
+    assert not any(name.startswith("fashion=") for name in features)
 
 
 def test_normalized_demand_contains_bad_sales_row() -> None:
@@ -82,7 +93,7 @@ def test_match_confidence_is_separate_from_demand_uncertainty() -> None:
 
 def test_generated_artifact_contract() -> None:
     data = json.loads((APP_ROOT / "app" / "generated-data.json").read_text(encoding="utf-8"))
-    assert data["meta"]["model"]["version"] == "2.3.1"
+    assert data["meta"]["model"]["version"] == "2.3.2"
     assert data["meta"]["model"]["demandLibrary"] == "scikit-learn"
     assert "FashionCLIP" in data["meta"]["visualMethod"]
     assert data["meta"]["visionModel"]["modelId"] == "patrickjohncyh/fashion-clip"
@@ -90,6 +101,12 @@ def test_generated_artifact_contract() -> None:
     assert data["meta"]["visionModel"]["historicalCoverage"] == data["meta"]["historicalImageCoverage"]
     assert data["meta"]["visionModel"]["upcomingCoverage"] == data["meta"]["upcomingImageCoverage"]
     assert data["meta"]["model"]["trainingRows"] == len(data["historical"])
+    assert data["meta"]["attributeAudit"]["activeCount"] == 9
+    assert set(data["meta"]["model"]["attributeWeights"]) == {
+        "category", "sleeve", "provision", "pattern", "lifecycle",
+        "fit", "fabric", "colour", "price",
+    }
+    assert {row["historicalColumn"] for row in data["meta"]["attributeAudit"]["excludedConstants"]} == {"CAT2", "CAT5"}
     assert 0 <= data["meta"]["model"]["backtest"]["wape"] <= 1
     assert len(data["upcoming"]) == data["meta"]["upcomingItems"]
     for item in data["upcoming"]:
@@ -100,6 +117,7 @@ def test_generated_artifact_contract() -> None:
         assert recommendation["quantity"] % 25 == 0
         assert all(0 <= match["attributeScore"] <= 1 for match in item["matches"])
         assert all(match["visualScore"] is None or 0 <= match["visualScore"] <= 1 for match in item["matches"])
+        assert all("range" not in match["attributeBreakdown"] and "fashion" not in match["attributeBreakdown"] for match in item["matches"])
 
     model = data["meta"]["model"]
     history = data["historical"]

@@ -218,7 +218,6 @@ def attribute_score(upcoming: dict[str, object], historical: dict[str, object]):
         "lifecycle": categorical(lifecycle_family(upcoming["CAT6"]), lifecycle_family(historical["CAT6"])),
         "fit": categorical(upcoming["CAT3"], historical["CAT3"]),
         "fabric": max(categorical(upcoming["CAT4"], historical["CAT4"]), jaccard(upcoming["CAT4"], historical["CAT4"])),
-        "fashion": categorical(upcoming["CAT5"], historical["CAT5"]),
         "colour": colour_similarity(upcoming["COLOR"], historical["COLOR_NAME"]),
         "price": math.exp(-abs(math.log(max(float(upcoming["MRP"]), 1) / max(float(historical["MRP"]), 1))) / 0.30),
     }
@@ -226,11 +225,10 @@ def attribute_score(upcoming: dict[str, object], historical: dict[str, object]):
         "category": 0.16,
         "sleeve": 0.07,
         "provision": 0.07,
-        "pattern": 0.16,
-        "lifecycle": 0.04,
+        "pattern": 0.17,
+        "lifecycle": 0.05,
         "fit": 0.14,
         "fabric": 0.14,
-        "fashion": 0.02,
         "colour": 0.09,
         "price": 0.11,
     }

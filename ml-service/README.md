@@ -2,11 +2,11 @@
 
 This directory contains two related runtimes:
 
-- a fitted v2.3.1 pilot that serves the local sample artifact; and
+- a fitted v2.3.2 pilot that serves the local sample artifact; and
 - a v3 scale architecture for PostgreSQL/pgvector retrieval, learned ranking,
   quantile demand forecasting, constrained ordering, jobs and feedback.
 
-The v2.3.1 pilot is active and reproducible. The v3 software path is implemented,
+The v2.3.2 pilot is active and reproducible. The v3 software path is implemented,
 but production model artifacts and a populated client catalogue are not present.
 
 ## Status at a glance
@@ -14,8 +14,8 @@ but production model artifacts and a populated client catalogue are not present.
 | Component | Code status | Model/data status | Active in local browser POC |
 |---|---|---|---|
 | FashionCLIP batch image embeddings | Implemented | Embeddings generated for 33 historical and 164 upcoming images with the base fashion-domain checkpoint | Yes, precomputed |
-| Attribute similarity | Implemented | Fixed explainable weights | Yes |
-| Hybrid analogue retrieval | Implemented | Current default 30% attributes / 70% FashionCLIP, top 3 | Yes |
+| Attribute similarity | Implemented | Nine audited, explainable fields; constants automatically excluded | Yes |
+| Hybrid analogue retrieval | Implemented | Current default 80% attributes / 20% FashionCLIP, top 8 | Yes |
 | Pilot demand ensemble | Implemented | scikit-learn Pipeline fitted on 33 outcomes with leave-one-out validation | Yes |
 | Conformal uncertainty and pilot buy limits | Implemented | Calibrated from out-of-fold residuals | Yes |
 | v1 sample API | Implemented and tested | Loads `app/generated-data.json` | Optional; browser does not require it |
@@ -31,7 +31,7 @@ but production model artifacts and a populated client catalogue are not present.
 
 | Field | Value |
 |---|---|
-| Model version | 2.3.1 |
+| Model version | 2.3.2 |
 | Training outcomes | 33 historical items |
 | Upcoming catalogue | 167 items |
 | Image coverage | 33/33 historical; 164/167 upcoming |
@@ -39,13 +39,13 @@ but production model artifacts and a populated client catalogue are not present.
 | Checkpoint revision | `7e3ba62ce16b379a1ab479346b66f192e76f51b7` |
 | Image representation | 512D unit-normalized FashionCLIP vectors |
 | Visual comparison | Cosine distance with robust logistic calibration |
-| Hybrid retrieval | 30% attribute + 70% visual; top 3 |
+| Hybrid retrieval | 80% attribute + 20% visual; top 8 |
 | Demand ensemble | 50% analogue + 50% scikit-learn Ridge; alpha 10 |
 | Target sell-through | 70% |
 | Evaluation | Leave-one-out; temporal holdout unavailable |
-| WAPE | 40.57% |
-| MAE | 168.6 units |
-| Bias | +3.08% |
+| WAPE | 41.47% |
+| MAE | 172.3 units |
+| Bias | +7.37% |
 | Interval | Finite-sample 80% conformal; 87.88% empirical coverage |
 | Pilot order limits | 25-unit pack; 100 minimum; 2,000 maximum |
 
@@ -62,20 +62,30 @@ double-count structured commercial information.
 | Category/item type | 16% | Exact match plus a strong cross-category penalty |
 | Sleeve | 7% | Exact categorical match |
 | Provision/fit code | 7% | Exact categorical match |
-| Pattern | 16% | Exact or mapped pattern-family similarity |
-| Season family | 4% | Normalized `AW`, `SS`, or `CORE` match |
+| Pattern | 17% | Exact or mapped pattern-family similarity |
+| Season family | 5% | Normalized `AW`, `SS`, or `CORE` match |
 | Fit/collection | 14% | Exact categorical match |
 | Fabric | 14% | Exact match or token Jaccard similarity |
-| Fashion/merch type | 2% | Exact categorical match |
 | Colour | 9% | Exact or mapped colour-family similarity |
 | Price | 11% | Smooth log-price distance |
 
 The current training search uses scikit-learn `ParameterGrid` and
 `LeaveOneOut`. It tests attribute weights from 10% through 90%, neighbour counts
 of 3, 5 and 8, Ridge penalties of 0.1, 1, 10 and 100, and regression blends of
-15%, 25%, 35% and 50%. It selected 30% attributes / 70% vision, top 3, alpha 10,
-and a 50/50 demand blend. These remain pilot defaults and require nested temporal
-validation before production.
+15%, 25%, 35% and 50%. Model v2.3.2 selected 80% attributes / 20% vision,
+top 8, alpha 10 and a 50/50 demand blend after the constant-field removal.
+These remain pilot defaults and require nested temporal validation before
+production.
+
+The artifact builder profiles every candidate field against historical data. A
+field must be comparable in both seasons and have at least two populated
+historical values before it can contribute to similarity; active weights are
+renormalized if another future workbook field becomes constant. In the supplied
+workbooks, `CAT2` is constant after canonicalizing `CMI + VMI` and `VMI + CMI`,
+while historical `CAT5` is entirely `FASHION`. Both are excluded from similarity
+and from the pilot Ridge feature dictionary. Identifiers, colour variant codes
+and outcome fields are retained for joins or forecasting but excluded from
+product matching.
 
 ### Demand and risk logic
 
@@ -96,7 +106,7 @@ validation before production.
 
 This separation prevents a strong product match from being mislabeled as a weak
 match simply because the demand model has limited history. In the current sample,
-25 items have high match confidence, while 162 of 167 items retain wide demand
+12 items have high match confidence, while all 167 items retain wide demand
 uncertainty because the fitted conformal half-width is 325 units.
 
 The interface can change similarity weights, target sell-through and analogue
