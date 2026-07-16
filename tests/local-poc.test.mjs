@@ -77,8 +77,8 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.match(stylesSource, /\.catalog-attribute-grid dd\s*\{[^}]*overflow-wrap:\s*break-word[^}]*word-break:\s*normal/s);
   assert.match(stylesSource, /\.catalog-attribute-toggle\s*\{[^}]*width:\s*auto/s);
   assert.match(stylesSource, /\.match-card-select\s*\{[^}]*width:\s*100%/s);
-  assert.match(stylesSource, /\.match-card \.catalog-attribute-grid > div\s*\{[^}]*display:\s*flex[^}]*min-height:\s*28px/s);
-  assert.match(stylesSource, /\.match-card \.catalog-attribute-grid > div:nth-child\(3\),[^}]*flex-direction:\s*column/s);
+  assert.match(stylesSource, /\.match-card \.catalog-attribute-grid > div\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column[^}]*min-height:\s*28px/s);
+  assert.doesNotMatch(stylesSource, /\.match-card \.catalog-attribute-grid > div:nth-child/);
   assert.match(stylesSource, /\.match-performance\s*\{[^}]*margin-top:\s*5px[^}]*padding-top:\s*5px/s);
   assert.match(stylesSource, /\.match-performance span\s*\{[^}]*font-size:\s*10px/s);
   assert.doesNotMatch(stylesSource, /\.match-card \.match-attribute-catalog-heading[^}]*font-size/s);
