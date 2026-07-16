@@ -43,8 +43,10 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.match(pageSource, /Top historical analogue/);
   assert.match(pageSource, /Analogue-based demand/);
   assert.match(pageSource, /MatchAttributeCatalog/);
-  assert.match(pageSource, /Upcoming match attributes/);
-  assert.match(pageSource, /Historical match attributes/);
+  assert.match(pageSource, /Product attributes/);
+  assert.match(pageSource, /\$\{context\} product attributes/);
+  assert.doesNotMatch(pageSource, /Upcoming match attributes/);
+  assert.doesNotMatch(pageSource, /Historical match attributes/);
   assert.match(pageSource, /View all 9 attributes/);
   assert.match(pageSource, /Show 4 key attributes/);
   assert.doesNotMatch(pageSource, /\+5 Show all 9/);

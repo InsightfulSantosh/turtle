@@ -414,9 +414,9 @@ function MatchAttributeCatalog({
     : catalogAttributeOrder.slice(0, 4);
 
   return (
-    <section className="match-attribute-catalog" aria-label={`${context} match attributes`}>
+    <section className="match-attribute-catalog" aria-label={`${context} product attributes`}>
       <div className="match-attribute-catalog-heading">
-        <small>{context} match attributes</small>
+        <small>Product attributes</small>
         <span>{expanded ? "9 of 9 shown" : "4 of 9 shown"}</span>
       </div>
       <dl className="catalog-attribute-grid">
