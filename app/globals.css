@@ -612,14 +612,24 @@ select {
   padding: 15px;
 }
 
+.upcoming-card {
+  overflow: hidden;
+}
+
 .hero-product-image {
+  aspect-ratio: auto 3 / 4;
   background: linear-gradient(135deg, #eee9df, #e6dfd4);
-  border-radius: 13px;
-  height: 350px;
-  margin-top: 12px;
+  display: block;
+  height: auto;
+  margin: 12px -15px 0;
+  max-width: none;
   object-fit: contain;
   object-position: center;
-  width: 100%;
+  width: calc(100% + 30px);
+}
+
+.image-fallback.hero-product-image {
+  aspect-ratio: 3 / 4;
 }
 
 .image-fallback {
@@ -2388,10 +2398,6 @@ select {
   .activation-gate span {
     display: block;
     margin-top: 7px;
-  }
-
-  .hero-product-image {
-    height: 380px;
   }
 
   .recommendation-card {
