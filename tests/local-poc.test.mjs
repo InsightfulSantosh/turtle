@@ -84,7 +84,7 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.match(stylesSource, /\.catalog-attribute-grid dd\s*\{[^}]*overflow-wrap:\s*break-word[^}]*word-break:\s*normal/s);
   assert.match(stylesSource, /\.catalog-attribute-toggle\s*\{[^}]*width:\s*auto/s);
   assert.match(stylesSource, /\.match-card-select\s*\{[^}]*width:\s*100%/s);
-  assert.match(stylesSource, /\.match-card::after\s*\{[^}]*border:\s*2px solid transparent[^}]*inset:\s*0[^}]*pointer-events:\s*none[^}]*z-index:\s*3/s);
+  assert.match(stylesSource, /\.match-card::after\s*\{[^}]*border:\s*1px solid transparent[^}]*inset:\s*0[^}]*pointer-events:\s*none[^}]*z-index:\s*3/s);
   assert.match(stylesSource, /\.match-card:hover::after,\s*\.match-card\.active::after\s*\{[^}]*border-color:\s*var\(--forest-2\)/s);
   assert.doesNotMatch(stylesSource, /\.match-card:hover,\s*\.match-card\.active\s*\{[^}]*transform:/s);
   assert.match(stylesSource, /\.match-card \.catalog-attribute-grid > div\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column[^}]*min-height:\s*26px/s);
