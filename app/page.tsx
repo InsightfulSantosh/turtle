@@ -901,8 +901,8 @@ function App() {
                       <div className="match-card-catalog">
                         <MatchAttributeCatalog product={historical} context="Historical" />
                         <div className="match-performance">
-                          <span><small>Order</small>{numberFormatter.format(historical.order)}</span>
-                          <span><small>Sell-through</small>{scorePercent(historical.sellThrough)}</span>
+                          <span><small>Order</small><strong>{numberFormatter.format(historical.order)}</strong></span>
+                          <span><small>Sell-through</small><strong>{scorePercent(historical.sellThrough)}</strong></span>
                         </div>
                       </div>
                     </article>

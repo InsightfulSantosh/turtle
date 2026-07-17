@@ -619,14 +619,14 @@ select {
 .hero-product-image {
   aspect-ratio: auto 3 / 4;
   background: linear-gradient(135deg, #eee9df, #e6dfd4);
-  border-radius: 0;
+  border-radius: 13px;
   display: block;
   height: auto;
-  margin: 12px -15px 0;
-  max-width: none;
+  margin: 12px auto 0;
+  max-width: 100%;
   object-fit: contain;
   object-position: center;
-  width: calc(100% + 30px);
+  width: 100%;
 }
 
 .image-fallback.hero-product-image {
@@ -1249,7 +1249,7 @@ select {
 }
 
 .match-image {
-  aspect-ratio: 5 / 6;
+  aspect-ratio: auto 3 / 4;
   background: linear-gradient(135deg, #eee9df, #e6dfd4);
   display: block;
   height: auto;
@@ -1376,32 +1376,42 @@ select {
 .match-performance {
   border-top: 1px solid var(--line);
   display: grid;
+  gap: 4px;
   grid-template-columns: 1fr 1fr;
   margin-top: 4px;
   padding-top: 4px;
 }
 
 .match-performance span {
-  align-items: baseline;
+  align-items: flex-start;
+  background: #f3f4ef;
+  border-radius: 7px;
   display: flex;
-  font-size: 10px;
-  font-weight: 900;
-  gap: 4px;
-  justify-content: space-between;
-  line-height: 1.2;
+  flex-direction: column;
+  gap: 1px;
+  justify-content: center;
+  min-width: 0;
+  padding: 4px 6px;
 }
 
 .match-performance span + span {
-  border-left: 1px solid var(--line);
-  padding-left: 5px;
+  border-left: 0;
 }
 
 .match-performance small {
-  display: inline;
+  display: block;
   font-size: 7px;
   letter-spacing: 0.04em;
+  line-height: 1.1;
   margin: 0;
   white-space: nowrap;
+}
+
+.match-performance strong {
+  color: var(--ink);
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1.15;
 }
 
 .evidence-panel {

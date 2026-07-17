@@ -89,9 +89,10 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.doesNotMatch(stylesSource, /\.match-card:hover,\s*\.match-card\.active\s*\{[^}]*transform:/s);
   assert.match(stylesSource, /\.match-card \.catalog-attribute-grid > div\s*\{[^}]*display:\s*flex[^}]*flex-direction:\s*column[^}]*min-height:\s*26px/s);
   assert.doesNotMatch(stylesSource, /\.match-card \.catalog-attribute-grid > div:nth-child/);
-  assert.match(stylesSource, /\.match-performance\s*\{[^}]*margin-top:\s*4px[^}]*padding-top:\s*4px/s);
-  assert.match(stylesSource, /\.match-performance span\s*\{[^}]*font-size:\s*10px/s);
-  assert.match(stylesSource, /\.match-performance small\s*\{[^}]*white-space:\s*nowrap/s);
+  assert.match(stylesSource, /\.match-performance\s*\{[^}]*gap:\s*4px[^}]*margin-top:\s*4px[^}]*padding-top:\s*4px/s);
+  assert.match(stylesSource, /\.match-performance span\s*\{[^}]*align-items:\s*flex-start[^}]*flex-direction:\s*column[^}]*min-width:\s*0/s);
+  assert.match(stylesSource, /\.match-performance small\s*\{[^}]*display:\s*block[^}]*white-space:\s*nowrap/s);
+  assert.match(stylesSource, /\.match-performance strong\s*\{[^}]*font-size:\s*11px[^}]*font-weight:\s*900/s);
   assert.doesNotMatch(stylesSource, /\.match-card \.match-attribute-catalog-heading[^}]*font-size/s);
   assert.doesNotMatch(stylesSource, /\.match-card \.catalog-attribute-grid (?:dt|dd)\s*\{[^}]*font-size/s);
   assert.match(stylesSource, /\.match-card \.catalog-attribute-grid dd\s*\{[^}]*font-weight:\s*700[^}]*min-height:\s*0/s);
@@ -99,9 +100,9 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.match(stylesSource, /\.evidence-header\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) 230px/s);
   assert.match(stylesSource, /\.evidence-product-pair\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\) 28px minmax\(0, 1fr\)/s);
   assert.match(stylesSource, /\.attribute-evidence\s*\{[^}]*grid-template-columns:\s*repeat\(3,/s);
-  assert.match(stylesSource, /\.hero-product-image\s*\{[^}]*aspect-ratio:\s*auto 3 \/ 4[^}]*border-radius:\s*0[^}]*height:\s*auto[^}]*margin:\s*12px -15px 0[^}]*max-width:\s*none[^}]*object-fit:\s*contain[^}]*object-position:\s*center[^}]*width:\s*calc\(100% \+ 30px\)/s);
+  assert.match(stylesSource, /\.hero-product-image\s*\{[^}]*aspect-ratio:\s*auto 3 \/ 4[^}]*border-radius:\s*13px[^}]*height:\s*auto[^}]*margin:\s*12px auto 0[^}]*max-width:\s*100%[^}]*object-fit:\s*contain[^}]*object-position:\s*center[^}]*width:\s*100%/s);
   assert.match(stylesSource, /\.image-fallback\.hero-product-image\s*\{[^}]*aspect-ratio:\s*3 \/ 4/s);
-  assert.match(stylesSource, /\.match-image\s*\{[^}]*aspect-ratio:\s*5 \/ 6[^}]*height:\s*auto[^}]*object-fit:\s*contain/s);
+  assert.match(stylesSource, /\.match-image\s*\{[^}]*aspect-ratio:\s*auto 3 \/ 4[^}]*height:\s*auto[^}]*object-fit:\s*contain/s);
   assert.match(stylesSource, /\.image-fallback\.match-image\s*\{[^}]*aspect-ratio:\s*5 \/ 6/s);
   assert.match(stylesSource, /\.recommendation-metrics\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
   assert.match(stylesSource, /\.recommendation-metrics small,[^}]*overflow-wrap:\s*anywhere/s);
