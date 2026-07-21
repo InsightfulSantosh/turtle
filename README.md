@@ -8,6 +8,9 @@ for catalogues of approximately 200,000–500,000 items.
 The current POC runs locally with standard Next.js and does not require an
 external hosting or authentication platform.
 
+For a step-by-step explanation of every calculation and a ready-to-use client
+presentation script, see [CLIENT_DEMO_GUIDE.md](CLIENT_DEMO_GUIDE.md).
+
 ## Current status
 
 | Layer | Status | Current reality |
