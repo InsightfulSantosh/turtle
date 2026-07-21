@@ -1039,7 +1039,8 @@ select {
 .upcoming-card,
 .recommendation-card,
 .settings-card {
-  align-self: start;
+  align-self: stretch;
+  box-sizing: border-box;
 }
 
 .range-control,

@@ -116,6 +116,7 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.match(stylesSource, /\.image-fallback\.match-image\s*\{[^}]*aspect-ratio:\s*5 \/ 6/s);
   assert.match(stylesSource, /\.recommendation-metrics\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
   assert.match(stylesSource, /\.quantity-secondary\s*\{[^}]*border-radius:\s*12px[^}]*flex-direction:\s*column/s);
+  assert.match(stylesSource, /\.upcoming-card,\s*\.recommendation-card,\s*\.settings-card\s*\{[^}]*align-self:\s*stretch[^}]*box-sizing:\s*border-box/s);
   assert.match(stylesSource, /\.recommendation-metrics small,[^}]*overflow-wrap:\s*anywhere/s);
   assert.match(stylesSource, /\.queue-commercial\s*\{[^}]*justify-content:\s*space-between/s);
   assert.doesNotMatch(stylesSource, /\.product-details-grid\s*\{/);
