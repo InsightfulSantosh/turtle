@@ -608,12 +608,12 @@ function App() {
         "Top historical match",
         "Combined similarity",
         "Attribute similarity",
-        "FashionCLIP similarity",
+        "Visual AI similarity",
         "Match confidence",
         "Sales uncertainty",
         "Uncertainty half-width percentage",
         "Analogue expected sales",
-        "Ridge expected sales",
+        "Machine-learning expected sales",
         "Expected sales",
         "Expected sales low",
         "Expected sales high",
@@ -800,7 +800,7 @@ function App() {
                 <div className="recommendation-topline">
                   <div>
                     <span className="card-label">AI buy recommendation</span>
-                    <p>FashionCLIP retrieval + retrained scikit-learn unit-sales model</p>
+                    <p>Visual AI retrieval + trained unit-sales forecasting</p>
                   </div>
                   <div className="signal-pills">
                     <MatchConfidencePill confidence={decision.matchConfidence} detailed />
@@ -834,7 +834,7 @@ function App() {
                 <div className="recommendation-metrics">
                   <div><small>Top historical analogue</small><strong>{decision.ranked[0]?.historicalId}</strong></div>
                   <div><small>Analogue sales forecast</small><strong>{numberFormatter.format(decision.analogueSales)} units</strong></div>
-                  <div><small>Ridge sales forecast</small><strong>{numberFormatter.format(decision.regressionSales)} units</strong></div>
+                  <div><small>Machine-learning sales forecast</small><strong>{numberFormatter.format(decision.regressionSales)} units</strong></div>
                   <div><small>Sales backtest WAPE</small><strong>{scorePercent(dataset.meta.model.backtest.wape)}</strong></div>
                 </div>
                 <div className="override-row">
@@ -897,8 +897,8 @@ function App() {
                   <small>Every selected product is shown below and contributes to the quantity calculation.</small>
                 </label>
                 <div className="method-note">
-                  <span>PyTorch FashionCLIP + scikit-learn</span>
-                  <p>Fashion-domain image embeddings, validation-selected weights and top-K, a fitted Ridge pipeline, and finite-sample conformal uncertainty.</p>
+                  <span>Visual AI + demand intelligence</span>
+                  <p>Fashion-domain visual embeddings, validation-selected matching, a trained sales model, and data-calibrated uncertainty.</p>
                 </div>
               </aside>
             </div>
@@ -912,7 +912,7 @@ function App() {
                 </div>
                 <div className="analogue-header-tools">
                   <span className="analogue-count-chip">{topK} used</span>
-                  <div className="score-legend"><span><i className="attr" /> Attribute</span><span><i className="visual" /> FashionCLIP</span></div>
+                  <div className="score-legend"><span><i className="attr" /> Attribute</span><span><i className="visual" /> Visual AI</span></div>
                 </div>
               </div>
               <div className={`match-grid match-grid-${topK}`}>
@@ -960,7 +960,7 @@ function App() {
                   <div className="evidence-intro">
                     <span className="eyebrow">Match evidence</span>
                     <h2>Why this analogue matched</h2>
-                    <p>The overall similarity combines product attributes with FashionCLIP image similarity. Review every scored field below before using this historical style as demand evidence.</p>
+                    <p>The overall similarity combines structured product attributes with deep visual similarity. Review every scored field below before using this historical style as sales evidence.</p>
                     <div className="evidence-product-pair">
                       <div className="evidence-product-card">
                         <ProductImage src={selected.imageUrl} alt={`Upcoming ${selected.id}`} className="evidence-product-image" />
@@ -991,7 +991,7 @@ function App() {
                       <ScoreRing score={focusedMatch.attributeScore} label="Attributes" />
                       <ScoreRing score={focusedMatch.visualScore ?? 0} label="Image" />
                     </div>
-                    <p>Image score uses FashionCLIP; the overall score uses the selected attribute and visual weights.</p>
+                    <p>The image score uses deep visual embeddings; the overall score uses the selected attribute and visual weights.</p>
                   </aside>
                 </div>
                 <div className="evidence-attribute-heading">
@@ -1036,7 +1036,7 @@ function App() {
           </div>
           <div className="kpi-grid">
             <article><span>Total styles</span><strong>{dataset.meta.upcomingItems}</strong><small>{dataset.meta.upcomingImageCoverage} with images</small></article>
-            <article><span>FashionCLIP coverage</span><strong>{scorePercent(dataset.meta.upcomingImageCoverage / dataset.meta.upcomingItems)}</strong><small>{dataset.meta.missingUpcomingImages.length} linked-image exceptions</small></article>
+            <article><span>Visual AI coverage</span><strong>{scorePercent(dataset.meta.upcomingImageCoverage / dataset.meta.upcomingItems)}</strong><small>{dataset.meta.missingUpcomingImages.length} linked-image exceptions</small></article>
             <article><span>LOO backtest WAPE</span><strong>{scorePercent(dataset.meta.model.backtest.wape)}</strong><small>MAE {numberFormatter.format(dataset.meta.model.backtest.mae)} units</small></article>
             <article className="accent"><span>Recommended buy</span><strong>{numberFormatter.format(totalBuy)}</strong><small>units across sample</small></article>
           </div>
@@ -1077,15 +1077,15 @@ function App() {
       {tab === "method" && (
         <section className="method-page page-wrap">
           <div className="page-heading method-heading">
-            <div><span className="eyebrow">AI with measurable evidence</span><h1>How model v{dataset.meta.model.version} reaches a recommendation</h1><p>A PyTorch/Transformers FashionCLIP and scikit-learn demand workflow with validation, uncertainty, data guardrails, and planner control.</p></div>
+            <div><span className="eyebrow">AI with measurable evidence</span><h1>How model v{dataset.meta.model.version} reaches a recommendation</h1><p>A multimodal product-matching and learned sales-forecasting workflow with validation, uncertainty, data guardrails, and planner control.</p></div>
             <div className="poc-badge"><span>AI v{dataset.meta.model.version}</span><small>Dedicated ML libraries</small></div>
           </div>
           <div className="workflow-grid">
             {[
               ["01", "Audit inputs", "Map both workbook schemas, remove constant or non-comparable fields, link images, and quarantine inconsistent outcome values."],
-              ["02", "Encode products", "Create nine-field structured evidence and 512-dimensional FashionCLIP embeddings from garment images."],
-              ["03", "Learn retrieval", "Use scikit-learn ParameterGrid and LeaveOneOut to tune attribute/vision weights, neighbour count, blend, and regularization."],
-              ["04", "Forecast unit sales", "Ensemble similarity-weighted historical sales with a fitted DictVectorizer, StandardScaler, and Ridge pipeline."],
+              ["02", "Encode products", "Create nine-field structured evidence and 512-dimensional visual product embeddings from garment images."],
+              ["03", "Learn retrieval", "Use leave-one-out validation and parameter search to tune attribute/vision weights, neighbour count, forecast blend, and regularization."],
+              ["04", "Forecast unit sales", "Ensemble similarity-weighted historical sales with a trained, regularized machine-learning forecast."],
               ["05", "Convert forecast to a buy", "Keep expected sales independent, apply the sell-through inventory policy, then enforce pack and quantity limits."],
             ].map(([number, title, copy]) => <article key={number}><span>{number}</span><h3>{title}</h3><p>{copy}</p></article>)}
           </div>
@@ -1137,7 +1137,7 @@ function App() {
               <h2>Readable enough to challenge</h2>
               <div className="formula">
                 <p>Match score</p>
-                <strong>{attributeWeight}% × Attribute + {visualWeight}% × FashionCLIP</strong>
+                <strong>{attributeWeight}% × Attribute + {visualWeight}% × Visual AI</strong>
               </div>
               <div className="formula">
                 <p>Match confidence</p>
@@ -1149,7 +1149,7 @@ function App() {
               </div>
               <div className="formula">
                 <p>Expected sales forecast</p>
-                <strong>{Math.round((1 - dataset.meta.model.regressionBlend) * 100)}% analogue sales + {Math.round(dataset.meta.model.regressionBlend * 100)}% scikit-learn Ridge sales</strong>
+                <strong>{Math.round((1 - dataset.meta.model.regressionBlend) * 100)}% analogue sales + {Math.round(dataset.meta.model.regressionBlend * 100)}% machine-learning sales forecast</strong>
               </div>
               <div className="formula">
                 <p>Recommended initial order</p>
@@ -1178,9 +1178,9 @@ function App() {
           </div>
           <div className="upgrade-table">
             <div><span>Layer</span><b>Local sample now</b><b>Scale platform implementation</b></div>
-            <div><span>Visual representation</span><p>{dataset.meta.visionModel.modelId} · {dataset.meta.visionModel.embeddingDimension}D cosine · revision {dataset.meta.visionModel.modelRevision?.slice(0, 8) ?? "unknown"}</p><p>Fine-tuned FashionCLIP image/text service; client-specific tuning awaits reviewed pairs</p></div>
-            <div><span>Retrieval</span><p>Precomputed attribute and FashionCLIP scoring against all 33 historical styles</p><p>Metadata-filtered pgvector HNSW top-200 retrieval, then top-10 re-ranking</p></div>
-            <div><span>Quantity logic</span><p>Sales forecast from validation-tuned analogue + {dataset.meta.model.demandPipeline}; buy derived from sell-through policy</p><p>P10/P50/P90 LightGBM training and inference with MinTrace hierarchy reconciliation</p></div>
+            <div><span>Visual representation</span><p>Fashion-domain visual embeddings · {dataset.meta.visionModel.embeddingDimension}D cosine similarity · versioned artifact</p><p>Client-tuned visual image/text embedding service; domain tuning awaits reviewed pairs</p></div>
+            <div><span>Retrieval</span><p>Precomputed attribute and Visual AI scoring against all 33 historical styles</p><p>Metadata-filtered vector search followed by learned re-ranking</p></div>
+            <div><span>Quantity logic</span><p>Sales forecast from a validation-tuned analogue and regularized machine-learning ensemble; buy derived from sell-through policy</p><p>Temporal P10/P50/P90 forecasting with hierarchical reconciliation</p></div>
             <div><span>Decision signals</span><p>Separate match confidence and sales uncertainty labels</p><p>Relevance calibration plus category-level temporal forecast uncertainty</p></div>
             <div><span>Uncertainty</span><p>Out-of-fold conformal expected-sales range</p><p>Temporal quantiles calibrated by category, channel and region</p></div>
             <div><span>Workflow</span><p>Browser-session planner override</p><p>Durable batch jobs, feedback capture, model registry and recommendation audit schema</p></div>
@@ -1198,10 +1198,10 @@ function App() {
             <div className="scale-readiness-grid">
               {[
                 ["Code ready", "Vector catalogue", "512-dimensional half-vector storage, hard metadata filters and HNSW nearest-neighbour retrieval."],
-                ["Code ready", "Fashion embedding service", "Containerized FashionCLIP image/text inference with domain allowlisting, size limits and private-network blocking."],
-                ["Needs client labels", "Learning-to-rank", "CatBoost training and model loading use planner relevance feedback, outcome reliability and product evidence."],
-                ["Needs 3–5 seasons", "Demand forecasting", "Temporal P10/P50/P90 LightGBM training uses clean stock-out, markdown, channel and hierarchy features."],
-                ["Needs calibration", "Hierarchy + risk", "MinTrace reconciliation keeps category, channel and region totals coherent before order constraints."],
+                ["Code ready", "Visual embedding service", "Containerized deep image/text inference with domain allowlisting, size limits and private-network blocking."],
+                ["Needs client labels", "Learning-to-rank", "Gradient-boosted ranking uses planner relevance feedback, outcome reliability and product evidence."],
+                ["Needs 3–5 seasons", "Demand forecasting", "Temporal P10/P50/P90 quantile forecasting uses clean stock-out, markdown, channel and hierarchy features."],
+                ["Needs calibration", "Hierarchy + risk", "Hierarchical reconciliation keeps category, channel and region totals coherent before order constraints."],
                 ["Code ready", "Operations", "MOQ, pack, budget and capacity optimisation plus durable ingestion, batch, feedback and audit records."],
               ].map(([state, title, copy]) => (
                 <article key={title} className={state === "Code ready" ? "ready" : "waiting"}>

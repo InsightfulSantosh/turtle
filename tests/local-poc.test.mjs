@@ -42,7 +42,7 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.ok(artifact.upcoming.every(({ matches }) => matches.every(({ attributeBreakdown }) => (
     "lifecycle" in attributeBreakdown && !("range" in attributeBreakdown) && !("fashion" in attributeBreakdown)
   ))));
-  assert.match(pageSource, /FashionCLIP retrieval \+ retrained scikit-learn unit-sales model/);
+  assert.match(pageSource, /Visual AI retrieval \+ trained unit-sales forecasting/);
   assert.match(pageSource, /Match confidence/);
   assert.match(pageSource, /Sales uncertainty/);
   assert.match(pageSource, /Top historical analogue/);
@@ -70,7 +70,8 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.match(pageSource, /Attribute-by-attribute comparison/);
   assert.match(pageSource, /Upcoming style/);
   assert.match(pageSource, /Historical analogue/);
-  assert.match(pageSource, /Image score uses FashionCLIP/);
+  assert.match(pageSource, /image score uses deep visual embeddings/i);
+  assert.doesNotMatch(pageSource, /FashionCLIP|scikit-learn|PyTorch|Ridge sales|CatBoost|LightGBM|pgvector|MinTrace/);
   assert.match(pageSource, /attributeValueReaders/);
   assert.match(pageSource, /catalogAttributeOrder/);
   assert.match(pageSource, /const catalogAttributeOrder = \[\s*"colour",\s*"price",\s*"pattern",\s*"fabric",/s);
