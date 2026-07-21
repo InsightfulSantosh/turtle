@@ -15,8 +15,9 @@ external hosting or authentication platform.
 | Planner interface | Active locally | Compare products, inspect match evidence, run scenarios, review the portfolio and export CSV |
 | FashionCLIP image matching | Active in the POC | Real 512-dimensional embeddings from the supplied product images |
 | Attribute similarity | Active in the POC | Weighted category, pattern, fit, fabric, colour, price and related evidence |
-| Historical analogue retrieval | Active in the POC | All 33 historical products are scored; the validated default uses the top 8 |
-| Order recommendation | Active as a pilot | Analogue demand blended with a scikit-learn Ridge pipeline and uncertainty guardrails |
+| Historical analogue retrieval | Active in the POC | All 33 historical products are scored; the validated default uses the top 3 |
+| Sales forecast | Active as a pilot | Analogue sales blended with a scikit-learn Ridge pipeline and conformal uncertainty |
+| Order recommendation | Active as a pilot | Expected sales converted to inventory using the chosen target sell-through |
 | Sample Python API | Implemented and tested | Versioned v1 model and recommendation endpoints use the fitted POC artifact |
 | Scale platform | Code implemented, not production-activated | Requires a populated pgvector catalogue and approved trained model artifacts |
 
@@ -29,7 +30,7 @@ external hosting or authentication platform.
 | Historical image coverage | 33 / 33 |
 | Upcoming image coverage | 164 / 167 |
 | Missing upcoming images | 3 |
-| POC model version | 2.3.2 |
+| POC model version | 2.4.0 |
 | FashionCLIP dimension | 512 |
 
 The three upcoming items without a usable local image are
@@ -51,32 +52,33 @@ uses the generated artifact and does not need a live embedding service.
 4. Calculate explainable similarity across nine informative, comparable
    attributes for every upcoming/historical product pair.
 5. Combine attributes and FashionCLIP, rank historical analogues, and use the
-   selected top products as demand evidence.
-6. Normalize historical sales to the target sell-through and contain anomalous
-   rows relative to observed supply.
+   selected top products as sales evidence.
+6. Clean historical unit sales and cap the one impossible sales-above-observed-
+   supply row without changing valid outcomes.
 7. Fit a scikit-learn `DictVectorizer` → `StandardScaler` → `Ridge` pipeline and
-   blend its prediction with similarity-weighted analogue demand.
-8. Apply an out-of-fold conformal range, 25-unit pack rounding, and 100–2,000
-   unit pilot limits.
+   blend its expected-sales prediction with similarity-weighted analogue sales.
+8. Apply an out-of-fold conformal range to expected sales, then calculate the
+   initial order as `expected sales ÷ target sell-through`, with 25-unit pack
+   rounding and 100–2,000 unit pilot limits.
 
 ### Current validated defaults
 
 | Setting | Default | Meaning |
 |---|---:|---|
-| Attribute weight | 80% | Structured commercial and product evidence |
-| FashionCLIP weight | 20% | Garment-image similarity |
-| Historical products used | 8 | Highest-ranked analogues included in the quantity calculation |
-| Analogue forecast blend | 50% | Similarity-weighted historical demand |
-| Ridge forecast blend | 50% | Fitted scikit-learn multivariate demand baseline |
-| Target sell-through | 70% | Planning policy used to translate sales demand into inventory |
+| Attribute weight | 20% | Structured commercial and product evidence |
+| FashionCLIP weight | 80% | Garment-image similarity |
+| Historical products used | 3 | Highest-ranked analogues included in the sales forecast |
+| Analogue forecast blend | 50% | Similarity-weighted historical unit sales |
+| Ridge forecast blend | 50% | Fitted scikit-learn multivariate sales baseline |
+| Target sell-through | 70% | Inventory policy used to convert expected sales into an initial order |
 
 `scikit-learn` performs the pilot model selection with `LeaveOneOut` and
 `ParameterGrid`. The search tests attribute weights from 10% to 90%, top 3/5/8
 analogues, Ridge penalties of 0.1/1/10/100, and regression blends of
-15%/25%/35%/50%. The selected 80/20 similarity blend, top 8, 50/50 demand blend,
-and Ridge alpha 10 are still pilot defaults because only 33 outcomes are
-available. Production selection requires nested temporal validation and
-planner-labelled relevance pairs.
+15%/25%/35%/50%. Model v2.4.0 selected the 20/80 similarity blend, top 3,
+50/50 sales blend and Ridge alpha 10. These are still pilot defaults because
+only 33 outcomes are available. Production selection requires nested temporal
+validation and planner-labelled relevance pairs.
 
 The workbook audit retains item type, sleeve, provision/fit code, pattern,
 lifecycle family, collection/fit, fabric, colour name and MRP. `CAT2` range is
@@ -88,35 +90,38 @@ Methodology screen exposes the source-column mapping, distinct-value counts,
 weights and exclusions.
 
 The interface allows live scenario changes to the similarity weights, target
-sell-through and analogue count. A custom scenario recalculates rankings and
-quantities, but the displayed backtest metrics continue to describe the fitted
-default model; changing a control does not retrain the model.
+sell-through and analogue count. Similarity or analogue changes recalculate the
+analogue component of expected sales. Target sell-through changes only the
+recommended order—not the AI sales forecast. The displayed backtest metrics
+continue to describe the fitted default model; changing a control does not
+retrain the model.
 
 ## Pilot validation
 
 | Metric | Current result |
 |---|---:|
-| Leave-one-out WAPE | 41.47% |
-| Mean absolute error | 172.3 units |
-| Forecast bias | +7.37% |
+| Leave-one-out sales WAPE | 44.57% |
+| Sales mean absolute error | 127.0 units |
+| Sales forecast bias | +3.82% |
 | Empirical conformal interval coverage | 87.88% |
-| Conformal half-width before similarity adjustment | 325 units |
-| High match-confidence items | 12 |
-| Medium match-confidence items | 141 |
-| Low match-confidence items | 14 |
-| Narrow demand-uncertainty ranges | 0 |
-| Moderate demand-uncertainty ranges | 0 |
-| Wide demand-uncertainty ranges | 167 |
+| Sales conformal half-width before similarity adjustment | 250 units |
+| High match-confidence items | 33 |
+| Medium match-confidence items | 114 |
+| Low match-confidence items | 20 |
+| Narrow sales-uncertainty ranges | 0 |
+| Moderate sales-uncertainty ranges | 0 |
+| Wide sales-uncertainty ranges | 167 |
 
 These results are evidence for a POC, not production certification. Leave-one-out
 validation is used because only 33 historical outcomes were supplied. A credible
 production assessment needs at least three clean seasons and a forward temporal
-holdout. Model v2.3.2 reports two deliberately separate signals: match confidence
-describes the relevance and quality of the historical analogues, while demand
-uncertainty describes the conformal forecast half-width relative to the proposed
-buy. A product can therefore have a high-confidence match and a wide demand
+holdout. Model v2.4.0 reports two deliberately separate signals: match confidence
+describes the relevance and quality of the historical analogues, while sales
+uncertainty describes the conformal forecast half-width relative to expected
+sales. A product can therefore have a high-confidence match and a wide sales
 range. The predominance of wide ranges reflects the small 33-outcome sample and
-large out-of-fold forecast errors.
+large out-of-fold forecast errors. The earlier buy-target metrics are not directly
+comparable because v2.4.0 deliberately changed the learning target to unit sales.
 
 The fitted data also contains eight dispatch-above-order records, one
 sales-above-dispatch record and one sell-through-above-100% record. The pipeline
@@ -135,8 +140,10 @@ flags these issues and constrains their effect rather than silently trusting the
 - Top 3, 5 or 8 analogue scenarios; every selected analogue is displayed and
   contributes to the calculation
 - Validated-default versus custom-scenario labels
-- Target sell-through and similarity-weight scenarios
-- Recommended quantity, expected demand range, separate decision signals and
+- Inventory strategy and similarity-weight scenarios
+- Recommended initial order, expected customer sales and sales forecast range
+- Clear separation between the AI sales forecast and the sell-through policy
+- Separate match-confidence and sales-uncertainty decision signals and
   model components
 - Planner quantity override and approval interaction
 - Portfolio table, filters, totals and CSV export

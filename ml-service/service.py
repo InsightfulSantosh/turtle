@@ -148,7 +148,8 @@ class CatalogPerformanceInput(BaseModel):
     dispatchQuantity: int | None = Field(default=None, ge=0)
     salesQuantity: int = Field(ge=0)
     sellThrough: float | None = Field(default=None, ge=0, le=10)
-    normalizedDemand: float = Field(ge=0)
+    salesTarget: float | None = Field(default=None, ge=0)
+    normalizedDemand: float | None = Field(default=None, ge=0)
     stockoutDays: int | None = Field(default=None, ge=0)
     markdownRate: float | None = Field(default=None, ge=0, le=1)
     grossMargin: float | None = None
@@ -183,7 +184,7 @@ class ModelRuntime:
         } or None
         self.history = self.artifact["historical"]
         self.history_by_id = {item["id"]: item for item in self.history}
-        self.targets = np.asarray([float(item["normalizedDemand"]) for item in self.history])
+        self.targets = np.asarray([float(item["salesTarget"]) for item in self.history])
         self.demand_pipeline = fit_demand_pipeline(
             self.history,
             self.targets,
@@ -215,16 +216,26 @@ class ModelRuntime:
             self.demand_pipeline,
             model,
         )
-        scale = float(self.model["targetSellThrough"]) / payload.settings.targetSellThrough
-        for key in ("quantity", "low", "high", "analogueQuantity", "regressionQuantity", "intervalHalfWidth"):
-            result[key] = max(100, min(2_000, int(round((result[key] * scale) / 25) * 25)))
+        target_sell_through = payload.settings.targetSellThrough
+        for source, destination in (
+            ("expectedSales", "quantity"),
+            ("salesLow", "low"),
+            ("salesHigh", "high"),
+            ("analogueSales", "analogueQuantity"),
+            ("regressionSales", "regressionQuantity"),
+            ("salesIntervalHalfWidth", "intervalHalfWidth"),
+        ):
+            result[destination] = max(
+                100,
+                min(2_000, int(round((result[source] / target_sell_through) / 25) * 25)),
+            )
         result["uncertaintyRatio"] = round(
-            result["intervalHalfWidth"] / max(result["quantity"], 1),
+            result["salesIntervalHalfWidth"] / max(result["expectedSales"], 1),
             4,
         )
         result["demandUncertainty"] = demand_uncertainty(
-            result["quantity"],
-            result["intervalHalfWidth"],
+            result["expectedSales"],
+            result["salesIntervalHalfWidth"],
         )
         return {
             "requestId": str(uuid.uuid4()),

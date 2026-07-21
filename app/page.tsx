@@ -29,6 +29,7 @@ type HistoricalItem = {
   sellThrough: number;
   imageUrl?: string | null;
   hasVisualFeature: boolean;
+  salesTarget: number;
   normalizedDemand: number;
   qualityFlags: string[];
 };
@@ -67,6 +68,12 @@ type UpcomingItem = {
     matchConfidence: Confidence;
     demandUncertainty: DemandUncertainty;
     uncertaintyRatio: number;
+    expectedSales: number;
+    salesLow: number;
+    salesHigh: number;
+    analogueSales: number;
+    regressionSales: number;
+    salesIntervalHalfWidth: number;
     analogueQuantity: number;
     regressionQuantity: number;
     intervalHalfWidth: number;
@@ -146,6 +153,7 @@ type Dataset = {
       topK: number;
       regressionBlend: number;
       ridgeAlpha: number;
+      salesConformalHalfWidth: number;
       conformalHalfWidth: number;
       evaluation: string;
       interval: string;
@@ -175,6 +183,12 @@ type Decision = {
   matchConfidence: Confidence;
   demandUncertainty: DemandUncertainty;
   uncertaintyRatio: number;
+  expectedSales: number;
+  salesLow: number;
+  salesHigh: number;
+  analogueSales: number;
+  regressionSales: number;
+  salesIntervalHalfWidth: number;
   analogueQuantity: number;
   regressionQuantity: number;
   intervalHalfWidth: number;
@@ -290,31 +304,29 @@ function makeDecision(
   top.forEach((match) => {
     const historical = historyById.get(match.historicalId);
     if (!historical) return;
-    const adjusted = historical.normalizedDemand *
-      (dataset.meta.model.targetSellThrough / Math.max(targetSellThrough / 100, 0.01));
     const weight = Math.max(match.combinedScore, 0.01) ** 2;
-    numerator += adjusted * weight;
+    numerator += historical.salesTarget * weight;
     denominator += weight;
   });
 
-  const analogueQuantity = numerator / Math.max(denominator, 0.01);
-  const regressionQuantity = item.recommendation.regressionQuantity *
-    (dataset.meta.model.targetSellThrough / Math.max(targetSellThrough / 100, 0.01));
+  const analogueSales = numerator / Math.max(denominator, 0.01);
+  const regressionSales = item.recommendation.regressionSales;
   const blend = dataset.meta.model.regressionBlend;
-  const rawQuantity = analogueQuantity * (1 - blend) + regressionQuantity * blend;
-  const quantity = clamp(roundPack(rawQuantity), 100, 2000);
+  const rawExpectedSales = analogueSales * (1 - blend) + regressionSales * blend;
+  const expectedSales = clamp(roundPack(rawExpectedSales), 0, 2000);
+  const sellThroughPolicy = Math.max(targetSellThrough / 100, 0.01);
+  const quantity = clamp(roundPack(expectedSales / sellThroughPolicy), 100, 2000);
   const topScore = top[0]?.combinedScore ?? 0;
   const averageTop =
     top.slice(0, 3).reduce((sum, match) => sum + match.combinedScore, 0) /
     Math.max(top.slice(0, 3).length, 1);
-  const intervalHalfWidth = dataset.meta.model.conformalHalfWidth *
-    (dataset.meta.model.targetSellThrough / Math.max(targetSellThrough / 100, 0.01)) *
+  const salesIntervalHalfWidth = dataset.meta.model.salesConformalHalfWidth *
     (1 + Math.max(0, 0.7 - topScore));
   const issueCount = top.slice(0, 3).reduce((sum, match) => {
     const historical = historyById.get(match.historicalId);
     return sum + (historical?.qualityFlags.length ?? 0);
   }, 0);
-  const uncertaintyRatio = intervalHalfWidth / Math.max(quantity, 1);
+  const uncertaintyRatio = salesIntervalHalfWidth / Math.max(expectedSales, 1);
   let matchConfidence: Confidence = "Low";
   if (
     topScore >= 0.84 &&
@@ -344,6 +356,12 @@ function makeDecision(
       matchConfidence: item.recommendation.matchConfidence,
       demandUncertainty: item.recommendation.demandUncertainty,
       uncertaintyRatio: item.recommendation.uncertaintyRatio,
+      expectedSales: item.recommendation.expectedSales,
+      salesLow: item.recommendation.salesLow,
+      salesHigh: item.recommendation.salesHigh,
+      analogueSales: item.recommendation.analogueSales,
+      regressionSales: item.recommendation.regressionSales,
+      salesIntervalHalfWidth: item.recommendation.salesIntervalHalfWidth,
       analogueQuantity: item.recommendation.analogueQuantity,
       regressionQuantity: item.recommendation.regressionQuantity,
       intervalHalfWidth: item.recommendation.intervalHalfWidth,
@@ -353,14 +371,20 @@ function makeDecision(
   return {
     ranked,
     quantity,
-    low: clamp(roundPack(quantity - intervalHalfWidth), 100, 2000),
-    high: clamp(roundPack(quantity + intervalHalfWidth), 100, 2000),
+    low: clamp(roundPack(Math.max(expectedSales - salesIntervalHalfWidth, 0) / sellThroughPolicy), 100, 2000),
+    high: clamp(roundPack((expectedSales + salesIntervalHalfWidth) / sellThroughPolicy), 100, 2000),
     matchConfidence,
     demandUncertainty,
     uncertaintyRatio,
-    analogueQuantity: roundPack(analogueQuantity),
-    regressionQuantity: roundPack(regressionQuantity),
-    intervalHalfWidth: roundPack(intervalHalfWidth),
+    expectedSales,
+    salesLow: clamp(roundPack(expectedSales - salesIntervalHalfWidth), 0, 2000),
+    salesHigh: clamp(roundPack(expectedSales + salesIntervalHalfWidth), 0, 2000),
+    analogueSales: roundPack(analogueSales),
+    regressionSales: roundPack(regressionSales),
+    salesIntervalHalfWidth: roundPack(salesIntervalHalfWidth),
+    analogueQuantity: roundPack(analogueSales / sellThroughPolicy),
+    regressionQuantity: roundPack(regressionSales / sellThroughPolicy),
+    intervalHalfWidth: roundPack(salesIntervalHalfWidth / sellThroughPolicy),
   };
 }
 
@@ -464,7 +488,7 @@ function UncertaintyPill({
 }) {
   return (
     <span className={`uncertainty-pill ${uncertainty.toLowerCase()}`}>
-      {uncertainty} {detailed ? "demand uncertainty" : "uncertainty"}
+      {uncertainty} {detailed ? "sales uncertainty" : "uncertainty"}
     </span>
   );
 }
@@ -586,11 +610,16 @@ function App() {
         "Attribute similarity",
         "FashionCLIP similarity",
         "Match confidence",
-        "Demand uncertainty",
+        "Sales uncertainty",
         "Uncertainty half-width percentage",
-        "Analogue model quantity",
-        "Regularized model quantity",
-        "Recommended quantity",
+        "Analogue expected sales",
+        "Ridge expected sales",
+        "Expected sales",
+        "Expected sales low",
+        "Expected sales high",
+        "Recommended initial order",
+        "Recommended order low",
+        "Recommended order high",
         "Planner quantity",
         "Target sell-through",
         "Model version",
@@ -610,9 +639,14 @@ function App() {
           itemDecision.matchConfidence,
           itemDecision.demandUncertainty,
           Math.round(itemDecision.uncertaintyRatio * 100),
-          itemDecision.analogueQuantity,
-          itemDecision.regressionQuantity,
+          itemDecision.analogueSales,
+          itemDecision.regressionSales,
+          itemDecision.expectedSales,
+          itemDecision.salesLow,
+          itemDecision.salesHigh,
           itemDecision.quantity,
+          itemDecision.low,
+          itemDecision.high,
           overrides[item.id] ?? "",
           targetSellThrough,
           dataset.meta.model.version,
@@ -690,7 +724,7 @@ function App() {
                 <option value="Medium">Medium match</option>
                 <option value="Low">Low match</option>
               </select>
-              <select value={uncertaintyFilter} onChange={(event) => setUncertaintyFilter(event.target.value)} aria-label="Filter demand uncertainty">
+              <select value={uncertaintyFilter} onChange={(event) => setUncertaintyFilter(event.target.value)} aria-label="Filter sales uncertainty">
                 <option value="All">All ranges</option>
                 <option value="Narrow">Narrow range</option>
                 <option value="Moderate">Moderate range</option>
@@ -766,7 +800,7 @@ function App() {
                 <div className="recommendation-topline">
                   <div>
                     <span className="card-label">AI buy recommendation</span>
-                    <p>FashionCLIP retrieval + scikit-learn demand model</p>
+                    <p>FashionCLIP retrieval + retrained scikit-learn unit-sales model</p>
                   </div>
                   <div className="signal-pills">
                     <MatchConfidencePill confidence={decision.matchConfidence} detailed />
@@ -774,11 +808,19 @@ function App() {
                   </div>
                 </div>
                 <div className="quantity-hero">
-                  <div>
-                    <strong>{numberFormatter.format(finalQuantity)}</strong>
-                    <span>units</span>
+                  <div className="quantity-primary">
+                    <small>Recommended initial order</small>
+                    <div>
+                      <strong>{numberFormatter.format(finalQuantity)}</strong>
+                      <span>units</span>
+                    </div>
+                    <p>Expected sales ÷ {targetSellThrough}% inventory policy</p>
                   </div>
-                  <p>80% expected demand range <b>{numberFormatter.format(decision.low)}–{numberFormatter.format(decision.high)}</b></p>
+                  <div className="quantity-secondary">
+                    <small>Expected customer sales</small>
+                    <strong>{numberFormatter.format(decision.expectedSales)} units</strong>
+                    <span>80% forecast range {numberFormatter.format(decision.salesLow)}–{numberFormatter.format(decision.salesHigh)}</span>
+                  </div>
                 </div>
                 <div className="match-confidence-track" aria-label={`Top historical match score ${scorePercent(decision.ranked[0]?.combinedScore ?? 0)}`}>
                   <span style={{ width: `${Math.round((decision.ranked[0]?.combinedScore ?? 0) * 100)}%` }} />
@@ -786,14 +828,14 @@ function App() {
                 <div className="rationale-box">
                   <span className="rationale-icon">✦</span>
                   <p>
-                    <b>{decision.matchConfidence} match confidence</b> describes analogue relevance. <b>{decision.demandUncertainty.toLowerCase()} demand uncertainty</b> comes from the out-of-fold forecast-error range; the two signals are intentionally separate.
+                    The model forecasts <b>{numberFormatter.format(decision.expectedSales)} sales units</b> independently of inventory policy. The {targetSellThrough}% target converts that forecast into the recommended initial order; changing it does not retrain or alter expected sales.
                   </p>
                 </div>
                 <div className="recommendation-metrics">
                   <div><small>Top historical analogue</small><strong>{decision.ranked[0]?.historicalId}</strong></div>
-                  <div><small>Analogue-based demand</small><strong>{numberFormatter.format(decision.analogueQuantity)} units</strong></div>
-                  <div><small>Ridge model baseline</small><strong>{numberFormatter.format(decision.regressionQuantity)} units</strong></div>
-                  <div><small>Backtest error (WAPE)</small><strong>{scorePercent(dataset.meta.model.backtest.wape)}</strong></div>
+                  <div><small>Analogue sales forecast</small><strong>{numberFormatter.format(decision.analogueSales)} units</strong></div>
+                  <div><small>Ridge sales forecast</small><strong>{numberFormatter.format(decision.regressionSales)} units</strong></div>
+                  <div><small>Sales backtest WAPE</small><strong>{scorePercent(dataset.meta.model.backtest.wape)}</strong></div>
                 </div>
                 <div className="override-row">
                   <label>
@@ -835,8 +877,9 @@ function App() {
                   }} />
                 </label>
                 <label className="range-control">
-                  <span><b>Target sell-through</b><strong>{targetSellThrough}%</strong></span>
+                  <span><b>Inventory strategy</b><strong>{targetSellThrough}% ST</strong></span>
                   <input type="range" min="50" max="90" value={targetSellThrough} onChange={(event) => setTargetSellThrough(Number(event.target.value))} />
+                  <small className="setting-help">Adjusts the recommended order, not the AI sales forecast.</small>
                 </label>
                 <label className="select-control analogue-count-control">
                   <span>
@@ -988,7 +1031,7 @@ function App() {
       {tab === "portfolio" && (
         <section className="portfolio-page page-wrap">
           <div className="page-heading">
-            <div><span className="eyebrow">Upcoming assortment</span><h1>Portfolio recommendation</h1><p>Review analogue match confidence, demand uncertainty and buy quantities across the full sample.</p></div>
+            <div><span className="eyebrow">Upcoming assortment</span><h1>Portfolio recommendation</h1><p>Review expected sales, analogue evidence, uncertainty and recommended initial orders across the full sample.</p></div>
             <button className="button primary" onClick={exportCsv}>Export recommendation file</button>
           </div>
           <div className="kpi-grid">
@@ -1001,12 +1044,12 @@ function App() {
             <label className="search-box wide"><span>⌕</span><input value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} placeholder="Search item, pattern, colour or fabric" /></label>
             <select value={segment} onChange={(event) => setSegment(event.target.value)} aria-label="Filter portfolio category"><option>All</option><option>OTSH</option><option>OTTS</option></select>
             <select value={matchConfidenceFilter} onChange={(event) => setMatchConfidenceFilter(event.target.value)} aria-label="Filter portfolio match confidence"><option value="All">All matches</option><option value="High">High match</option><option value="Medium">Medium match</option><option value="Low">Low match</option></select>
-            <select value={uncertaintyFilter} onChange={(event) => setUncertaintyFilter(event.target.value)} aria-label="Filter portfolio demand uncertainty"><option value="All">All ranges</option><option value="Narrow">Narrow range</option><option value="Moderate">Moderate range</option><option value="Wide">Wide range</option></select>
+            <select value={uncertaintyFilter} onChange={(event) => setUncertaintyFilter(event.target.value)} aria-label="Filter portfolio sales uncertainty"><option value="All">All ranges</option><option value="Narrow">Narrow range</option><option value="Moderate">Moderate range</option><option value="Wide">Wide range</option></select>
             <span>{queueItems.length} results</span>
           </div>
           <div className="portfolio-table-wrap">
             <table className="portfolio-table">
-              <thead><tr><th>Upcoming style</th><th>Product attributes</th><th>Top historical analogue</th><th>Match score</th><th>Decision signals</th><th>Recommended buy</th><th>Planner buy</th><th><span className="sr-only">Actions</span></th></tr></thead>
+              <thead><tr><th>Upcoming style</th><th>Product attributes</th><th>Top historical analogue</th><th>Match score</th><th>Decision signals</th><th>Expected sales</th><th>Recommended buy</th><th>Planner buy</th><th><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>
                 {queueItems.map(({ item, decision: itemDecision }) => {
                   const top = itemDecision.ranked[0];
@@ -1018,6 +1061,7 @@ function App() {
                       <td>{historical && <div className="table-product"><ProductImage src={historical.imageUrl} alt={historical.id} className="table-image" /><span><strong>{historical.id}</strong><small>{historical.season} · ST {scorePercent(historical.sellThrough)}</small></span></div>}</td>
                       <td><strong className="match-score">{scorePercent(top?.combinedScore ?? 0)}</strong><small>Attr {scorePercent(top?.attributeScore ?? 0)} · Visual {scorePercent(top?.visualScore ?? 0)}</small></td>
                       <td><div className="table-signals"><MatchConfidencePill confidence={itemDecision.matchConfidence} detailed /><UncertaintyPill uncertainty={itemDecision.demandUncertainty} detailed /></div></td>
+                      <td><strong>{numberFormatter.format(itemDecision.expectedSales)}</strong><small>{numberFormatter.format(itemDecision.salesLow)}–{numberFormatter.format(itemDecision.salesHigh)} forecast</small></td>
                       <td><strong>{numberFormatter.format(itemDecision.quantity)}</strong><small>{numberFormatter.format(itemDecision.low)}–{numberFormatter.format(itemDecision.high)}</small></td>
                       <td><strong>{overrides[item.id] ? numberFormatter.format(overrides[item.id]) : "—"}</strong><small>{overrides[item.id] ? "Adjusted" : "Pending"}</small></td>
                       <td><button className="row-action" onClick={() => chooseItem(item.id)}>Review →</button></td>
@@ -1041,8 +1085,8 @@ function App() {
               ["01", "Audit inputs", "Map both workbook schemas, remove constant or non-comparable fields, link images, and quarantine inconsistent outcome values."],
               ["02", "Encode products", "Create nine-field structured evidence and 512-dimensional FashionCLIP embeddings from garment images."],
               ["03", "Learn retrieval", "Use scikit-learn ParameterGrid and LeaveOneOut to tune attribute/vision weights, neighbour count, blend, and regularization."],
-              ["04", "Predict demand", "Ensemble similarity-weighted analogue demand with a fitted DictVectorizer, StandardScaler, and Ridge pipeline."],
-              ["05", "Separate evidence and risk", "Report analogue match confidence independently from conformal demand uncertainty, then apply pack and quantity limits."],
+              ["04", "Forecast unit sales", "Ensemble similarity-weighted historical sales with a fitted DictVectorizer, StandardScaler, and Ridge pipeline."],
+              ["05", "Convert forecast to a buy", "Keep expected sales independent, apply the sell-through inventory policy, then enforce pack and quantity limits."],
             ].map(([number, title, copy]) => <article key={number}><span>{number}</span><h3>{title}</h3><p>{copy}</p></article>)}
           </div>
           <section className="attribute-audit-card">
@@ -1100,20 +1144,24 @@ function App() {
                 <strong>Top match strength + top-3 consistency + image availability + analogue data quality</strong>
               </div>
               <div className="formula">
-                <p>Historical demand target</p>
-                <strong>Sales ÷ {targetSellThrough}% sell-through, winsorized by available supply</strong>
+                <p>Historical training target</p>
+                <strong>Observed unit sales, capped by the strongest supply record only when sales exceed available supply</strong>
               </div>
               <div className="formula">
-                <p>Demand ensemble</p>
-                <strong>{Math.round((1 - dataset.meta.model.regressionBlend) * 100)}% analogue AI + {Math.round(dataset.meta.model.regressionBlend * 100)}% scikit-learn Ridge</strong>
+                <p>Expected sales forecast</p>
+                <strong>{Math.round((1 - dataset.meta.model.regressionBlend) * 100)}% analogue sales + {Math.round(dataset.meta.model.regressionBlend * 100)}% scikit-learn Ridge sales</strong>
               </div>
               <div className="formula">
-                <p>Demand uncertainty</p>
-                <strong>Narrow ≤ ±20% · Moderate ≤ ±40% · Wide &gt; ±40% of recommended buy</strong>
+                <p>Recommended initial order</p>
+                <strong>Expected sales ÷ {targetSellThrough}% target sell-through, rounded to 25-unit packs</strong>
               </div>
               <div className="formula">
-                <p>Expected range</p>
-                <strong>80% conformal interval + 25-unit pack + 100–2,000 unit guardrails</strong>
+                <p>Sales uncertainty</p>
+                <strong>Narrow ≤ ±20% · Moderate ≤ ±40% · Wide &gt; ±40% of expected sales</strong>
+              </div>
+              <div className="formula">
+                <p>Forecast and order ranges</p>
+                <strong>80% conformal sales interval, then sell-through conversion, 25-unit packs and 100–2,000 order guardrails</strong>
               </div>
             </article>
             <article className="readiness-card">
@@ -1125,16 +1173,16 @@ function App() {
                 <li><b>{scorePercent(dataset.meta.model.backtest.intervalCoverage)}</b> empirical interval coverage</li>
                 <li><b>{dataset.meta.dataQuality.dispatchAboveOrder + dataset.meta.dataQuality.salesAboveDispatch}</b> order/dispatch/sales anomalies contained by guardrails</li>
               </ul>
-              <div className="warning-note">The architecture is production-oriented; the fitted quantity model remains a pilot because only {dataset.meta.model.trainingRows} historical rows are available. Three to five clean seasons are required for a credible temporal production backtest.</div>
+              <div className="warning-note">The architecture is production-oriented; the fitted sales model remains a pilot because only {dataset.meta.model.trainingRows} historical rows are available. Three to five clean seasons are required for a credible temporal production backtest.</div>
             </article>
           </div>
           <div className="upgrade-table">
             <div><span>Layer</span><b>Local sample now</b><b>Scale platform implementation</b></div>
             <div><span>Visual representation</span><p>{dataset.meta.visionModel.modelId} · {dataset.meta.visionModel.embeddingDimension}D cosine · revision {dataset.meta.visionModel.modelRevision?.slice(0, 8) ?? "unknown"}</p><p>Fine-tuned FashionCLIP image/text service; client-specific tuning awaits reviewed pairs</p></div>
             <div><span>Retrieval</span><p>Precomputed attribute and FashionCLIP scoring against all 33 historical styles</p><p>Metadata-filtered pgvector HNSW top-200 retrieval, then top-10 re-ranking</p></div>
-            <div><span>Quantity logic</span><p>Validation-tuned analogue + {dataset.meta.model.demandPipeline} scikit-learn pipeline</p><p>P10/P50/P90 LightGBM training and inference with MinTrace hierarchy reconciliation</p></div>
-            <div><span>Decision signals</span><p>Separate match confidence and demand uncertainty labels</p><p>Relevance calibration plus category-level temporal forecast uncertainty</p></div>
-            <div><span>Uncertainty</span><p>Out-of-fold conformal quantity range</p><p>Temporal quantiles calibrated by category, channel and region</p></div>
+            <div><span>Quantity logic</span><p>Sales forecast from validation-tuned analogue + {dataset.meta.model.demandPipeline}; buy derived from sell-through policy</p><p>P10/P50/P90 LightGBM training and inference with MinTrace hierarchy reconciliation</p></div>
+            <div><span>Decision signals</span><p>Separate match confidence and sales uncertainty labels</p><p>Relevance calibration plus category-level temporal forecast uncertainty</p></div>
+            <div><span>Uncertainty</span><p>Out-of-fold conformal expected-sales range</p><p>Temporal quantiles calibrated by category, channel and region</p></div>
             <div><span>Workflow</span><p>Browser-session planner override</p><p>Durable batch jobs, feedback capture, model registry and recommendation audit schema</p></div>
             <div><span>Data</span><p>33 historical / 167 upcoming samples</p><p>3–5 seasons plus inventory and markdown context</p></div>
           </div>

@@ -14,10 +14,12 @@ test("keeps the local POC and fitted model contract intact", async () => {
   ]);
   const artifact = JSON.parse(artifactText);
 
-  assert.equal(artifact.meta.model.version, "2.3.2");
+  assert.equal(artifact.meta.model.version, "2.4.0");
   assert.equal(artifact.meta.model.demandLibrary, "scikit-learn");
   assert.equal(artifact.meta.visionModel.modelId, "patrickjohncyh/fashion-clip");
-  assert.equal(artifact.meta.model.topK, 8);
+  assert.equal(artifact.meta.model.topK, 3);
+  assert.equal(artifact.meta.model.attributeWeight, 0.2);
+  assert.equal(artifact.meta.model.visualWeight, 0.8);
   assert.equal(Object.values(artifact.meta.matchConfidenceCounts).reduce((sum, value) => sum + value, 0), artifact.meta.upcomingItems);
   assert.equal(Object.values(artifact.meta.demandUncertaintyCounts).reduce((sum, value) => sum + value, 0), artifact.meta.upcomingItems);
   assert.equal(artifact.meta.attributeAudit.activeCount, 9);
@@ -29,6 +31,9 @@ test("keeps the local POC and fitted model contract intact", async () => {
     recommendation.confidence === recommendation.matchConfidence
     && ["Narrow", "Moderate", "Wide"].includes(recommendation.demandUncertainty)
     && Number.isFinite(recommendation.uncertaintyRatio)
+    && recommendation.salesLow <= recommendation.expectedSales
+    && recommendation.expectedSales <= recommendation.salesHigh
+    && recommendation.expectedSales % 25 === 0
   )));
   assert.ok(artifact.upcoming.some(({ recommendation }) => (
     recommendation.matchConfidence === "High"
@@ -37,11 +42,15 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.ok(artifact.upcoming.every(({ matches }) => matches.every(({ attributeBreakdown }) => (
     "lifecycle" in attributeBreakdown && !("range" in attributeBreakdown) && !("fashion" in attributeBreakdown)
   ))));
-  assert.match(pageSource, /FashionCLIP retrieval \+ scikit-learn demand model/);
+  assert.match(pageSource, /FashionCLIP retrieval \+ retrained scikit-learn unit-sales model/);
   assert.match(pageSource, /Match confidence/);
-  assert.match(pageSource, /Demand uncertainty/);
+  assert.match(pageSource, /Sales uncertainty/);
   assert.match(pageSource, /Top historical analogue/);
-  assert.match(pageSource, /Analogue-based demand/);
+  assert.match(pageSource, /Expected customer sales/);
+  assert.match(pageSource, /Recommended initial order/);
+  assert.match(pageSource, /Analogue sales forecast/);
+  assert.match(pageSource, /Inventory strategy/);
+  assert.match(pageSource, /historical\.salesTarget/);
   assert.match(pageSource, /MatchAttributeCatalog/);
   assert.match(pageSource, /Product attributes/);
   assert.match(pageSource, /\$\{context\} product attributes/);
@@ -105,6 +114,7 @@ test("keeps the local POC and fitted model contract intact", async () => {
   assert.match(stylesSource, /\.match-image\s*\{[^}]*aspect-ratio:\s*auto 3 \/ 4[^}]*height:\s*auto[^}]*object-fit:\s*contain/s);
   assert.match(stylesSource, /\.image-fallback\.match-image\s*\{[^}]*aspect-ratio:\s*5 \/ 6/s);
   assert.match(stylesSource, /\.recommendation-metrics\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
+  assert.match(stylesSource, /\.quantity-secondary\s*\{[^}]*border-radius:\s*12px[^}]*flex-direction:\s*column/s);
   assert.match(stylesSource, /\.recommendation-metrics small,[^}]*overflow-wrap:\s*anywhere/s);
   assert.match(stylesSource, /\.queue-commercial\s*\{[^}]*justify-content:\s*space-between/s);
   assert.doesNotMatch(stylesSource, /\.product-details-grid\s*\{/);

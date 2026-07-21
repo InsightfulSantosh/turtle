@@ -2,11 +2,11 @@
 
 This directory contains two related runtimes:
 
-- a fitted v2.3.2 pilot that serves the local sample artifact; and
+- a fitted v2.4.0 pilot that serves the local sample artifact; and
 - a v3 scale architecture for PostgreSQL/pgvector retrieval, learned ranking,
   quantile demand forecasting, constrained ordering, jobs and feedback.
 
-The v2.3.2 pilot is active and reproducible. The v3 software path is implemented,
+The v2.4.0 pilot is active and reproducible. The v3 software path is implemented,
 but production model artifacts and a populated client catalogue are not present.
 
 ## Status at a glance
@@ -15,8 +15,9 @@ but production model artifacts and a populated client catalogue are not present.
 |---|---|---|---|
 | FashionCLIP batch image embeddings | Implemented | Embeddings generated for 33 historical and 164 upcoming images with the base fashion-domain checkpoint | Yes, precomputed |
 | Attribute similarity | Implemented | Nine audited, explainable fields; constants automatically excluded | Yes |
-| Hybrid analogue retrieval | Implemented | Current default 80% attributes / 20% FashionCLIP, top 8 | Yes |
-| Pilot demand ensemble | Implemented | scikit-learn Pipeline fitted on 33 outcomes with leave-one-out validation | Yes |
+| Hybrid analogue retrieval | Implemented | Current default 20% attributes / 80% FashionCLIP, top 3 | Yes |
+| Pilot sales ensemble | Implemented | scikit-learn Pipeline fitted on 33 sales outcomes with leave-one-out validation | Yes |
+| Initial-order policy | Implemented | Expected sales divided by the target sell-through and pack-rounded | Yes |
 | Conformal uncertainty and pilot buy limits | Implemented | Calibrated from out-of-fold residuals | Yes |
 | v1 sample API | Implemented and tested | Loads `app/generated-data.json` | Optional; browser does not require it |
 | FashionCLIP HTTP embedding service | Implemented | Public base model works for integration; client-tuned checkpoint absent | No |
@@ -31,7 +32,7 @@ but production model artifacts and a populated client catalogue are not present.
 
 | Field | Value |
 |---|---|
-| Model version | 2.3.2 |
+| Model version | 2.4.0 |
 | Training outcomes | 33 historical items |
 | Upcoming catalogue | 167 items |
 | Image coverage | 33/33 historical; 164/167 upcoming |
@@ -39,13 +40,14 @@ but production model artifacts and a populated client catalogue are not present.
 | Checkpoint revision | `7e3ba62ce16b379a1ab479346b66f192e76f51b7` |
 | Image representation | 512D unit-normalized FashionCLIP vectors |
 | Visual comparison | Cosine distance with robust logistic calibration |
-| Hybrid retrieval | 80% attribute + 20% visual; top 8 |
-| Demand ensemble | 50% analogue + 50% scikit-learn Ridge; alpha 10 |
-| Target sell-through | 70% |
+| Hybrid retrieval | 20% attribute + 80% visual; top 3 |
+| Sales ensemble | 50% analogue + 50% scikit-learn Ridge; alpha 10 |
+| Forecast target | Cleaned historical unit sales |
+| Initial-order policy | Expected sales ÷ 70% target sell-through |
 | Evaluation | Leave-one-out; temporal holdout unavailable |
-| WAPE | 41.47% |
-| MAE | 172.3 units |
-| Bias | +7.37% |
+| Sales WAPE | 44.57% |
+| Sales MAE | 127.0 units |
+| Sales bias | +3.82% |
 | Interval | Finite-sample 80% conformal; 87.88% empirical coverage |
 | Pilot order limits | 25-unit pack; 100 minimum; 2,000 maximum |
 
@@ -72,8 +74,8 @@ double-count structured commercial information.
 The current training search uses scikit-learn `ParameterGrid` and
 `LeaveOneOut`. It tests attribute weights from 10% through 90%, neighbour counts
 of 3, 5 and 8, Ridge penalties of 0.1, 1, 10 and 100, and regression blends of
-15%, 25%, 35% and 50%. Model v2.3.2 selected 80% attributes / 20% vision,
-top 8, alpha 10 and a 50/50 demand blend after the constant-field removal.
+15%, 25%, 35% and 50%. Model v2.4.0 selected 20% attributes / 80% vision,
+top 3, alpha 10 and a 50/50 sales blend after the constant-field removal.
 These remain pilot defaults and require nested temporal validation before
 production.
 
@@ -87,31 +89,38 @@ and from the pilot Ridge feature dictionary. Identifiers, colour variant codes
 and outcome fields are retained for joins or forecasting but excluded from
 product matching.
 
-### Demand and risk logic
+### Sales, order and risk logic
 
-- Historical demand is estimated as sales divided by target sell-through.
-- The demand target is winsorized to 45%–150% of the strongest available supply
-  observation to contain inconsistent sample rows.
-- Top analogue demands are averaged with squared hybrid-similarity weights.
+- The learned target is cleaned historical unit sales, not historical order or
+  sales divided by a user-selected policy.
+- The one impossible sales-above-observed-supply row is capped at the strongest
+  available order/dispatch observation; valid sales outcomes remain unchanged.
+- Top analogue sales are averaged with squared hybrid-similarity weights.
 - A scikit-learn `DictVectorizer` → `StandardScaler` → `Ridge` Pipeline supplies
   the regularized multivariate baseline. Preprocessing and fitting occur inside
   every validation fold; there is no handwritten matrix inversion.
-- Absolute out-of-fold residuals produce a finite-sample conformal interval.
+- The analogue and Ridge estimates are blended into expected customer sales.
+- Absolute out-of-fold sales residuals produce a finite-sample conformal range.
+- Recommended initial order is calculated as expected sales divided by target
+  sell-through, then pack-rounded and constrained to the POC order limits.
+- Changing target sell-through changes this inventory decision but leaves the AI
+  expected-sales forecast unchanged.
 - Match confidence describes analogue evidence only. High requires top similarity
   at least 84%, mean top-three similarity at least 72%, visual evidence and no
   analogue data-quality issues; medium requires 62% and 52%, respectively.
-- Demand uncertainty is a separate range-width signal. The conformal half-width
-  divided by the recommended buy is narrow at 20% or less, moderate through 40%,
+- Sales uncertainty is a separate range-width signal. The conformal half-width
+  divided by expected sales is narrow at 20% or less, moderate through 40%,
   and wide above 40%.
 
 This separation prevents a strong product match from being mislabeled as a weak
 match simply because the demand model has limited history. In the current sample,
-12 items have high match confidence, while all 167 items retain wide demand
-uncertainty because the fitted conformal half-width is 325 units.
+33 items have high match confidence, while all 167 items retain wide sales
+uncertainty because the fitted conformal half-width is 250 units.
 
 The interface can change similarity weights, target sell-through and analogue
-count for scenario analysis. Those controls do not refit the model or recompute
-the displayed backtest score.
+count for scenario analysis. Similarity settings can change expected sales;
+target sell-through changes only the recommended order. These controls do not
+refit the model or recompute the displayed backtest score.
 
 ## Rebuild the pilot artifact
 
@@ -221,7 +230,7 @@ Required training inputs:
 - FashionCLIP pairs: upcoming image path, historical image path, relevance and
   season.
 - Ranker: query ID, season, relevance and all fields in `RANK_FEATURES`.
-- Demand: season, normalized demand and the configured forecast features.
+- Demand: season, observed unit sales and the configured forecast features.
 - Hierarchy: one unambiguous category/channel/region path per bottom series.
 
 ## Production activation checklist
@@ -250,6 +259,6 @@ From the repository root:
 .venv/bin/python -m pytest -q ml-service/tests
 ```
 
-The current suite has 12 tests covering pilot model behavior, the scikit-learn
+The current suite has 14 tests covering pilot model behavior, the scikit-learn
 pipeline, artifact contract, vector validation, ranking, quantiles, optimization
 and MinTrace coherence.

@@ -15,7 +15,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 
-MODEL_VERSION = "2.3.2"
+MODEL_VERSION = "2.4.0"
 DEFAULT_TARGET_SELL_THROUGH = 0.70
 PACK_SIZE = 25
 MIN_BUY = 100
@@ -318,22 +318,25 @@ def quality_flags(item: dict[str, Any]) -> list[str]:
     return flags
 
 
-def normalized_demand(item: dict[str, Any], target_sell_through: float = DEFAULT_TARGET_SELL_THROUGH) -> float:
-    """Estimate an ideal initial buy while containing inconsistent sample rows.
+def sales_target(item: dict[str, Any]) -> float:
+    """Return cleaned observed unit sales for model training.
 
-    Sales divided by the target sell-through is the demand signal. The result is
-    winsorized relative to the strongest available supply observation so a bad
-    sell-through or dispatch row cannot dominate the model.
+    The supplied sample has one row where sales exceed both order and dispatch.
+    Until opening inventory and transfer data are available, cap that row at the
+    strongest observable supply value so it cannot dominate a 33-row pilot.
     """
 
     order = max(float(item.get("order") or 0), 0)
     dispatch = max(float(item.get("dispatch") or 0), 0)
     sales = max(float(item.get("sales") or 0), 0)
-    supply = max(order, dispatch, 1.0)
-    raw = sales / max(target_sell_through, 0.01)
-    if sales == 0:
-        raw = (order + dispatch) / 2
-    return clamp(raw, supply * 0.45, supply * 1.50)
+    supply = max(order, dispatch)
+    return min(sales, supply) if supply > 0 else sales
+
+
+def normalized_demand(item: dict[str, Any], target_sell_through: float = DEFAULT_TARGET_SELL_THROUGH) -> float:
+    """Compatibility order proxy derived from the cleaned sales target."""
+
+    return sales_target(item) / max(target_sell_through, 0.01)
 
 
 @dataclass(frozen=True)
@@ -550,7 +553,7 @@ def match_confidence(
 
 
 def demand_uncertainty(quantity: float, interval_half_width: float) -> str:
-    """Label uncertainty from the conformal half-width relative to the buy."""
+    """Label uncertainty from the conformal half-width relative to forecast sales."""
 
     relative_half_width = interval_half_width / max(quantity, 1.0)
     if relative_half_width <= 0.20:
@@ -573,29 +576,48 @@ def recommend_one(
     weights = np.asarray([max(float(match["hybridScore"]), 0.01) ** 2 for match in selected])
     history_index = {historical["id"]: index for index, historical in enumerate(history)}
     selected_targets = np.asarray([targets[history_index[match["historicalId"]]] for match in selected])
-    analogue = float(np.average(selected_targets, weights=weights))
-    regression = float(demand_pipeline.predict([demand_features(item)])[0])
-    regression = clamp(regression, MIN_BUY, MAX_BUY)
+    analogue_sales = float(np.average(selected_targets, weights=weights))
+    regression_sales = float(demand_pipeline.predict([demand_features(item)])[0])
+    regression_sales = clamp(regression_sales, 0, MAX_BUY)
     blend = float(model["regressionBlend"])
-    raw = analogue * (1 - blend) + regression * blend
-    quantity = int(clamp(round_pack(raw), MIN_BUY, MAX_BUY))
+    raw_sales = analogue_sales * (1 - blend) + regression_sales * blend
+    expected_sales = int(clamp(round_pack(raw_sales), 0, MAX_BUY))
+    target_sell_through = max(
+        float(model.get("targetSellThrough", DEFAULT_TARGET_SELL_THROUGH)),
+        0.01,
+    )
+    quantity = int(clamp(round_pack(expected_sales / target_sell_through), MIN_BUY, MAX_BUY))
     top_scores = [float(match["hybridScore"]) for match in selected]
     top_visual_available = bool(selected and selected[0].get("visualScore") is not None)
-    interval = float(model["conformalHalfWidth"]) * (1.0 + max(0.0, 0.7 - (top_scores[0] if top_scores else 0.0)))
+    sales_interval = float(
+        model.get("salesConformalHalfWidth", model["conformalHalfWidth"])
+    ) * (
+        1.0 + max(0.0, 0.7 - (top_scores[0] if top_scores else 0.0))
+    )
     issue_count = sum(len(quality_flags(history[history_index[match["historicalId"]]])) for match in selected[:3])
     relevance = match_confidence(top_scores, top_visual_available, issue_count)
-    uncertainty = demand_uncertainty(quantity, interval)
+    uncertainty = demand_uncertainty(expected_sales, sales_interval)
+    sales_low = int(clamp(round_pack(expected_sales - sales_interval), 0, MAX_BUY))
+    sales_high = int(clamp(round_pack(expected_sales + sales_interval), 0, MAX_BUY))
+    order_low = int(clamp(round_pack(sales_low / target_sell_through), MIN_BUY, MAX_BUY))
+    order_high = int(clamp(round_pack(sales_high / target_sell_through), MIN_BUY, MAX_BUY))
     return {
         "quantity": quantity,
-        "low": int(clamp(round_pack(quantity - interval), MIN_BUY, MAX_BUY)),
-        "high": int(clamp(round_pack(quantity + interval), MIN_BUY, MAX_BUY)),
+        "low": order_low,
+        "high": order_high,
+        "expectedSales": expected_sales,
+        "salesLow": sales_low,
+        "salesHigh": sales_high,
         "matchConfidence": relevance,
         "demandUncertainty": uncertainty,
-        "uncertaintyRatio": round(interval / max(quantity, 1.0), 4),
+        "uncertaintyRatio": round(sales_interval / max(expected_sales, 1.0), 4),
         "confidence": relevance,
-        "analogueQuantity": round_pack(analogue),
-        "regressionQuantity": round_pack(regression),
-        "intervalHalfWidth": round_pack(interval),
+        "analogueSales": round_pack(analogue_sales),
+        "regressionSales": round_pack(regression_sales),
+        "salesIntervalHalfWidth": round_pack(sales_interval),
+        "analogueQuantity": round_pack(analogue_sales / target_sell_through),
+        "regressionQuantity": round_pack(regression_sales / target_sell_through),
+        "intervalHalfWidth": round_pack(sales_interval / target_sell_through),
         "topMatchScore": round(top_scores[0] if top_scores else 0.0, 4),
         "modelVersion": MODEL_VERSION,
     }
@@ -629,12 +651,16 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
             if visual is not None:
                 visual_matrix[left_index, right_index] = visual
 
-    targets = np.asarray([normalized_demand(item) for item in history], dtype=np.float64)
+    targets = np.asarray([sales_target(item) for item in history], dtype=np.float64)
     fitted = backtest_model(history, attribute_matrix, visual_matrix, targets)
     for item, target in zip(history, targets):
         # Retain enough precision for API-side reproduction after loading the
-        # artifact. Final order recommendations are pack-rounded later.
-        item["normalizedDemand"] = round(float(target), 4)
+        # artifact. Sales and final order recommendations are pack-rounded later.
+        item["salesTarget"] = round(float(target), 4)
+        item["normalizedDemand"] = round(
+            float(target) / DEFAULT_TARGET_SELL_THROUGH,
+            4,
+        )
         item["qualityFlags"] = quality_flags(item)
 
     attribute_weight = float(fitted["attributeWeight"])
@@ -704,9 +730,11 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
             "status": "Pilot validated — production architecture",
             "trainingRows": count,
             "targetSellThrough": DEFAULT_TARGET_SELL_THROUGH,
-            "algorithm": "Calibrated FashionCLIP retrieval + scikit-learn Ridge demand ensemble",
+            "algorithm": "Calibrated FashionCLIP retrieval + scikit-learn Ridge sales forecast + inventory policy",
             "demandLibrary": "scikit-learn",
             "demandPipeline": "DictVectorizer + StandardScaler + Ridge",
+            "forecastTarget": "Cleaned historical unit sales",
+            "orderPolicy": "Expected sales divided by target sell-through",
             "modelSelection": "LeaveOneOut + ParameterGrid",
             "attributeWeights": {name: round(weight, 4) for name, weight in active_attribute_weights.items()},
             "attributeWeightGrid": [round(value / 10, 1) for value in range(1, 10)],
@@ -717,7 +745,8 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
             "ridgeAlpha": float(fitted["ridgeAlpha"]),
             "backtest": fitted["metrics"],
             "evaluation": "Leave-one-out validation; temporal holdout requires at least three clean seasons",
-            "interval": "Finite-sample 80% conformal interval from out-of-fold residuals",
+            "interval": "Finite-sample 80% conformal interval for expected sales from out-of-fold residuals",
+            "salesConformalHalfWidth": round_pack(float(fitted["conformalHalfWidth"])),
             "conformalHalfWidth": round_pack(float(fitted["conformalHalfWidth"])),
         },
         "visionCalibration": {

@@ -840,21 +840,40 @@ select {
 }
 
 .quantity-hero {
-  align-items: flex-end;
+  align-items: stretch;
   border-bottom: 1px solid var(--line);
   display: flex;
+  gap: 14px;
   justify-content: space-between;
   margin-top: 23px;
   padding-bottom: 15px;
 }
 
-.quantity-hero > div {
+.quantity-primary {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+}
+
+.quantity-primary > small,
+.quantity-secondary > small {
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.quantity-primary > div {
   align-items: baseline;
   display: flex;
   gap: 9px;
+  margin-top: 7px;
 }
 
-.quantity-hero > div strong {
+.quantity-primary > div strong {
   font-family: Georgia, "Times New Roman", serif;
   font-size: clamp(49px, 5vw, 71px);
   font-weight: 500;
@@ -862,25 +881,44 @@ select {
   line-height: 0.9;
 }
 
-.quantity-hero > div span {
+.quantity-primary > div span {
   color: var(--muted);
   font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
 }
 
-.quantity-hero p {
+.quantity-primary > p {
   color: var(--muted);
-  font-size: 10px;
-  margin: 0 0 5px;
-  text-align: right;
+  font-size: 9px;
+  margin: 7px 0 0;
 }
 
-.quantity-hero p b {
-  color: var(--ink);
-  display: block;
-  font-size: 13px;
-  margin-top: 3px;
+.quantity-secondary {
+  background: #f3f4ef;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  display: flex;
+  flex: 0 1 205px;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 170px;
+  padding: 12px 14px;
+}
+
+.quantity-secondary > strong {
+  color: var(--forest-2);
+  font-size: 20px;
+  line-height: 1.15;
+  margin-top: 7px;
+}
+
+.quantity-secondary > span {
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 700;
+  line-height: 1.4;
+  margin-top: 5px;
 }
 
 .match-confidence-track {
@@ -1035,6 +1073,15 @@ select {
   cursor: pointer;
   margin-top: 11px;
   width: 100%;
+}
+
+.range-control .setting-help {
+  color: var(--muted);
+  display: block;
+  font-size: 8px;
+  font-weight: 600;
+  line-height: 1.4;
+  margin-top: 6px;
 }
 
 .select-control select {
@@ -2599,8 +2646,10 @@ select {
     gap: 12px;
   }
 
-  .quantity-hero p {
-    text-align: left;
+  .quantity-secondary {
+    box-sizing: border-box;
+    flex-basis: auto;
+    width: 100%;
   }
 
   .recommendation-metrics {

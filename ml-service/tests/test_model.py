@@ -14,6 +14,7 @@ from season_intelligence.model import (
     match_confidence,
     normalized_demand,
     recommend_one,
+    sales_target,
 )
 
 
@@ -70,9 +71,10 @@ def test_constant_fields_are_not_sent_to_the_demand_pipeline() -> None:
     assert not any(name.startswith("fashion=") for name in features)
 
 
-def test_normalized_demand_contains_bad_sales_row() -> None:
+def test_sales_target_contains_bad_sales_row() -> None:
     item = {"order": 400, "dispatch": 390, "sales": 900, "sellThrough": 2.3}
-    assert normalized_demand(item) <= 600
+    assert sales_target(item) == 400
+    assert normalized_demand(item) == 400 / 0.70
 
 
 def test_demand_model_uses_sklearn_pipeline() -> None:
@@ -93,7 +95,7 @@ def test_match_confidence_is_separate_from_demand_uncertainty() -> None:
 
 def test_generated_artifact_contract() -> None:
     data = json.loads((APP_ROOT / "app" / "generated-data.json").read_text(encoding="utf-8"))
-    assert data["meta"]["model"]["version"] == "2.3.2"
+    assert data["meta"]["model"]["version"] == "2.4.0"
     assert data["meta"]["model"]["demandLibrary"] == "scikit-learn"
     assert "FashionCLIP" in data["meta"]["visualMethod"]
     assert data["meta"]["visionModel"]["modelId"] == "patrickjohncyh/fashion-clip"
@@ -108,20 +110,23 @@ def test_generated_artifact_contract() -> None:
     }
     assert {row["historicalColumn"] for row in data["meta"]["attributeAudit"]["excludedConstants"]} == {"CAT2", "CAT5"}
     assert 0 <= data["meta"]["model"]["backtest"]["wape"] <= 1
+    assert data["meta"]["model"]["forecastTarget"] == "Cleaned historical unit sales"
     assert len(data["upcoming"]) == data["meta"]["upcomingItems"]
     for item in data["upcoming"]:
         recommendation = item["recommendation"]
         assert recommendation["confidence"] == recommendation["matchConfidence"]
         assert recommendation["demandUncertainty"] in {"Narrow", "Moderate", "Wide"}
         assert recommendation["low"] <= recommendation["quantity"] <= recommendation["high"]
+        assert recommendation["salesLow"] <= recommendation["expectedSales"] <= recommendation["salesHigh"]
         assert recommendation["quantity"] % 25 == 0
+        assert recommendation["expectedSales"] % 25 == 0
         assert all(0 <= match["attributeScore"] <= 1 for match in item["matches"])
         assert all(match["visualScore"] is None or 0 <= match["visualScore"] <= 1 for match in item["matches"])
         assert all("range" not in match["attributeBreakdown"] and "fashion" not in match["attributeBreakdown"] for match in item["matches"])
 
     model = data["meta"]["model"]
     history = data["historical"]
-    targets = np.asarray([float(item["normalizedDemand"]) for item in history])
+    targets = np.asarray([float(item["salesTarget"]) for item in history])
     pipeline = fit_demand_pipeline(history, targets, float(model["ridgeAlpha"]))
     representative = next(item for item in data["upcoming"] if item["id"] == "OTSH-98427-1001")
     reproduced = recommend_one(
@@ -133,5 +138,20 @@ def test_generated_artifact_contract() -> None:
         model,
     )
     assert reproduced["quantity"] == representative["recommendation"]["quantity"]
+    assert reproduced["expectedSales"] == representative["recommendation"]["expectedSales"]
     assert reproduced["matchConfidence"] == representative["recommendation"]["matchConfidence"]
     assert reproduced["demandUncertainty"] == representative["recommendation"]["demandUncertainty"]
+
+    stricter_inventory_policy = dict(model, targetSellThrough=0.80)
+    policy_scenario = recommend_one(
+        representative,
+        history,
+        representative["matches"],
+        targets,
+        pipeline,
+        stricter_inventory_policy,
+    )
+    assert policy_scenario["expectedSales"] == reproduced["expectedSales"]
+    assert policy_scenario["salesLow"] == reproduced["salesLow"]
+    assert policy_scenario["salesHigh"] == reproduced["salesHigh"]
+    assert policy_scenario["quantity"] != reproduced["quantity"]
