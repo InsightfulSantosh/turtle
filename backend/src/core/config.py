@@ -1,0 +1,47 @@
+"""Central path and environment configuration for local and deployed runtimes."""
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass
+from pathlib import Path
+
+
+def _repository_root() -> Path:
+    current = Path(__file__).resolve()
+    for candidate in current.parents:
+        if (candidate / "backend").is_dir() and (candidate / "frontend").is_dir():
+            return candidate
+    return Path.cwd().resolve()
+
+
+def _environment_path(name: str, default: Path) -> Path:
+    configured = os.getenv(name)
+    return Path(configured).expanduser().resolve() if configured else default.resolve()
+
+
+@dataclass(frozen=True)
+class ProjectPaths:
+    repository: Path
+    workspace: Path
+    backend: Path
+    frontend: Path
+    data: Path
+    temporary: Path
+    model_artifact: Path
+
+
+REPOSITORY_ROOT = _repository_root()
+
+paths = ProjectPaths(
+    repository=REPOSITORY_ROOT,
+    workspace=REPOSITORY_ROOT,
+    backend=REPOSITORY_ROOT / "backend",
+    frontend=REPOSITORY_ROOT / "frontend",
+    data=_environment_path("TURTLE_DATA_ROOT", REPOSITORY_ROOT / "DATA"),
+    temporary=_environment_path("TURTLE_TEMP_ROOT", REPOSITORY_ROOT / "tmp"),
+    model_artifact=_environment_path(
+        "TURTLE_MODEL_ARTIFACT",
+        REPOSITORY_ROOT / "frontend" / "app" / "generated-data.json",
+    ),
+)

@@ -1,242 +1,122 @@
-# Turtle Season Intelligence AI
+# Turtle Season Intelligence
 
-Turtle Season Intelligence is a local client POC for matching upcoming fashion
-products to relevant historical styles and recommending an initial order
-quantity. The repository also contains a production-oriented scale architecture
-for catalogues of approximately 200,000–500,000 items.
+Turtle Season Intelligence compares upcoming fashion styles with historical
+products, forecasts demand and supports an initial-order decision. The codebase
+is split into an independent Next.js frontend and a modular Python backend.
 
-The current POC runs locally with standard Next.js and does not require an
-external hosting or authentication platform.
+The current browser artifact is built from the real historical and SS27
+workbooks in `DATA/raw`. Model limitations and forecast uncertainty remain
+visible in the application and should be treated as decision support rather
+than production certification.
 
-For a step-by-step explanation of every calculation and a ready-to-use client
-presentation script, see [CLIENT_DEMO_GUIDE.md](CLIENT_DEMO_GUIDE.md).
+## Architecture
 
-## Current status
+```text
+turtle/
+├── frontend/                         Next.js planner application
+│   ├── app/                          Pages, styles and generated-data.json
+│   ├── public/                       Static assets
+│   └── tests/                        Frontend and artifact-contract tests
+├── backend/                          Python services and data-science code
+│   ├── api/                          Main and embedding FastAPI applications
+│   ├── src/
+│   │   ├── ai/                       End-to-end recommendation orchestration
+│   │   ├── core/                     Central configuration and paths
+│   │   ├── data_pipeline/            Workbook validation and preparation
+│   │   ├── deep_learning/            Image/text embeddings and fine-tuning
+│   │   ├── domain/                   Shared business contracts
+│   │   └── machine_learning/         Ranking, demand and optimization models
+│   └── tests/                        Backend unit and contract tests
+├── Makefile                          Central developer commands
+└── CLIENT_DEMO_GUIDE.md              Model and client-demo explanation
+```
 
-| Layer | Status | Current reality |
-|---|---|---|
-| Planner interface | Active locally | Compare products, inspect match evidence, run scenarios, review the portfolio and export CSV |
-| FashionCLIP image matching | Active in the POC | Real 512-dimensional embeddings from the supplied product images |
-| Attribute similarity | Active in the POC | Weighted category, pattern, fit, fabric, colour, price and related evidence |
-| Historical analogue retrieval | Active in the POC | All 33 historical products are scored; the validated default uses the top 3 |
-| Sales forecast | Active as a pilot | Analogue sales blended with a scikit-learn Ridge pipeline and conformal uncertainty |
-| Order recommendation | Active as a pilot | Expected sales converted to inventory using the chosen target sell-through |
-| Sample Python API | Implemented and tested | Versioned v1 model and recommendation endpoints use the fitted POC artifact |
-| Scale platform | Code implemented, not production-activated | Requires a populated pgvector catalogue and approved trained model artifacts |
+The dependency direction is intentional:
 
-## Supplied data and active model artifact
+```text
+backend/api
+      ↓
+AI orchestration
+      ↓
+ML + deep learning
+      ↓
+domain contracts + core configuration
+```
 
-| Measure | Current value |
-|---|---:|
-| Historical items with outcomes | 33 |
-| Upcoming items | 167 |
-| Historical image coverage | 33 / 33 |
-| Upcoming image coverage | 164 / 167 |
-| Missing upcoming images | 3 |
-| POC model version | 2.4.0 |
-| FashionCLIP dimension | 512 |
+Frontend code does not import backend internals. The backend writes the
+versioned browser artifact to `frontend/app/generated-data.json`.
 
-The three upcoming items without a usable local image are
-`OTSH-62055-1001`, `OTSH-61388V-1014`, and `OTSH-61670V-1004`. They use
-attribute-only matching and are explicitly flagged in the interface.
+## Central configuration
 
-The active image model is `patrickjohncyh/fashion-clip` at revision
-`7e3ba62ce16b379a1ab479346b66f192e76f51b7`. Product images are read from the
-local image directory when the model artifact is built. The browser POC then
-uses the generated artifact and does not need a live embedding service.
+All local paths are defined in `backend/src/core/config.py`.
 
-## How the POC works
+The defaults are:
 
-1. Validate identifiers, product attributes, order, dispatch, sales and
-   sell-through fields.
-2. Encode available product images with FashionCLIP and unit-normalize the
-   resulting 512-dimensional vectors.
-3. Convert cosine distance into a calibrated visual-similarity score.
-4. Calculate explainable similarity across nine informative, comparable
-   attributes for every upcoming/historical product pair.
-5. Combine attributes and FashionCLIP, rank historical analogues, and use the
-   selected top products as sales evidence.
-6. Clean historical unit sales and cap the one impossible sales-above-observed-
-   supply row without changing valid outcomes.
-7. Fit a scikit-learn `DictVectorizer` → `StandardScaler` → `Ridge` pipeline and
-   blend its expected-sales prediction with similarity-weighted analogue sales.
-8. Apply an out-of-fold conformal range to expected sales, then calculate the
-   initial order as `expected sales ÷ target sell-through`, with 25-unit pack
-   rounding and 100–2,000 unit pilot limits.
+- Raw source workbooks and product images: `DATA/raw`
+- Cleaned datasets and validation report: `DATA/processed`
+- Temporary workbook conversions: `tmp`
+- Browser model artifact: `frontend/app/generated-data.json`
 
-### Current validated defaults
+Deployments can override them with:
 
-| Setting | Default | Meaning |
-|---|---:|---|
-| Attribute weight | 20% | Structured commercial and product evidence |
-| FashionCLIP weight | 80% | Garment-image similarity |
-| Historical products used | 3 | Highest-ranked analogues included in the sales forecast |
-| Analogue forecast blend | 50% | Similarity-weighted historical unit sales |
-| Ridge forecast blend | 50% | Fitted scikit-learn multivariate sales baseline |
-| Target sell-through | 70% | Inventory policy used to convert expected sales into an initial order |
+- `TURTLE_DATA_ROOT`
+- `TURTLE_TEMP_ROOT`
+- `TURTLE_MODEL_ARTIFACT`
 
-`scikit-learn` performs the pilot model selection with `LeaveOneOut` and
-`ParameterGrid`. The search tests attribute weights from 10% to 90%, top 3/5/8
-analogues, Ridge penalties of 0.1/1/10/100, and regression blends of
-15%/25%/35%/50%. Model v2.4.0 selected the 20/80 similarity blend, top 3,
-50/50 sales blend and Ridge alpha 10. These are still pilot defaults because
-only 33 outcomes are available. Production selection requires nested temporal
-validation and planner-labelled relevance pairs.
-
-The workbook audit retains item type, sleeve, provision/fit code, pattern,
-lifecycle family, collection/fit, fabric, colour name and MRP. `CAT2` range is
-constant after normalizing `CMI + VMI` / `VMI + CMI`, and historical `CAT5`
-merch type is entirely `FASHION`; both are excluded from similarity and the
-pilot Ridge feature set. Identifiers, colour variant codes and historical demand
-outcomes are also kept out of similarity for semantic and leakage reasons. The
-Methodology screen exposes the source-column mapping, distinct-value counts,
-weights and exclusions.
-
-The interface allows live scenario changes to the similarity weights, target
-sell-through and analogue count. Similarity or analogue changes recalculate the
-analogue component of expected sales. Target sell-through changes only the
-recommended order—not the AI sales forecast. The displayed backtest metrics
-continue to describe the fitted default model; changing a control does not
-retrain the model.
-
-## Pilot validation
-
-| Metric | Current result |
-|---|---:|
-| Leave-one-out sales WAPE | 44.57% |
-| Sales mean absolute error | 127.0 units |
-| Sales forecast bias | +3.82% |
-| Empirical conformal interval coverage | 87.88% |
-| Sales conformal half-width before similarity adjustment | 250 units |
-| High match-confidence items | 33 |
-| Medium match-confidence items | 114 |
-| Low match-confidence items | 20 |
-| Narrow sales-uncertainty ranges | 0 |
-| Moderate sales-uncertainty ranges | 0 |
-| Wide sales-uncertainty ranges | 167 |
-
-These results are evidence for a POC, not production certification. Leave-one-out
-validation is used because only 33 historical outcomes were supplied. A credible
-production assessment needs at least three clean seasons and a forward temporal
-holdout. Model v2.4.0 reports two deliberately separate signals: match confidence
-describes the relevance and quality of the historical analogues, while sales
-uncertainty describes the conformal forecast half-width relative to expected
-sales. A product can therefore have a high-confidence match and a wide sales
-range. The predominance of wide ranges reflects the small 33-outcome sample and
-large out-of-fold forecast errors. The earlier buy-target metrics are not directly
-comparable because v2.4.0 deliberately changed the learning target to unit sales.
-
-The fitted data also contains eight dispatch-above-order records, one
-sales-above-dispatch record and one sell-through-above-100% record. The pipeline
-flags these issues and constrains their effect rather than silently trusting them.
-
-## User experience
-
-- Upcoming product queue with image, pattern/colour, collection/fit, MRP,
-  recommended buy, match-confidence and demand-uncertainty signals
-- Consistent upcoming and historical product-attribute catalogs: Colour,
-  Price band, Pattern and Fabric appear first; `View all 9` reveals
-  Category, Collection, Sleeve, Fit code and Season family
-- Side-by-side upcoming and historical product images
-- Ranked historical analogue cards with the same expandable nine attributes,
-  order and sell-through alongside the similarity evidence
-- Top 3, 5 or 8 analogue scenarios; every selected analogue is displayed and
-  contributes to the calculation
-- Validated-default versus custom-scenario labels
-- Inventory strategy and similarity-weight scenarios
-- Recommended initial order, expected customer sales and sales forecast range
-- Clear separation between the AI sales forecast and the sell-through policy
-- Separate match-confidence and sales-uncertainty decision signals and
-  model components
-- Planner quantity override and approval interaction
-- Portfolio table, filters, totals and CSV export
-- Methodology page with model provenance and production-readiness boundaries
-
-## Run the local POC
+## Setup
 
 Prerequisites:
 
+- Python 3.12
 - Node.js 22.13 or newer
 - npm
+- LibreOffice for `.xlsb` conversion
 
 From the repository root:
 
 ```bash
-npm install
-npm run dev
-```
-
-Open `http://localhost:3000`.
-
-The frontend reads `app/generated-data.json`, so FashionCLIP and the Python API
-do not need to run while presenting the already-built POC.
-
-## Rebuild the data and FashionCLIP artifact
-
-The workbook preparation script expects the reviewed workbooks in the parent
-project and converted `.xlsx` copies in `../tmp/converted`. It writes the image
-download map to `../tmp/vision-images-map.json` and images to
-`../tmp/vision-images`.
-
-```bash
 python3 -m venv .venv
-.venv/bin/pip install -r ml-service/requirements-fashionclip.txt
-.venv/bin/pip install openpyxl
-.venv/bin/python scripts/prepare_sample_data.py downloads
-curl -L --config ../tmp/vision-images.curl.conf
-.venv/bin/python scripts/prepare_sample_data.py build
-HF_HOME=.model-cache PYTHON=.venv/bin/python ./ml-service/tools/build_fashion_clip_features.sh
+.venv/bin/pip install -r backend/requirements-dev.txt
+npm --prefix frontend install
 ```
 
-The final command replaces the temporary preprocessing similarities with real
-FashionCLIP distances, fits and validates the scikit-learn demand pipeline, and
-atomically refreshes `app/generated-data.json`. The model cache is local and
-git-ignored.
-
-## Verification
-
-Frontend:
+## Common commands
 
 ```bash
-npm run lint
-npx tsc --noEmit
-npm test
+make data            # rebuild the frontend artifact from the real workbooks
+make frontend-dev    # run the planner at http://localhost:3000
+make backend-api     # run FastAPI at http://localhost:8080
+make backend-test    # run Python tests
+make frontend-test   # build and test the Next.js application
+make test            # run both test suites
 ```
 
-Python model and scale components:
+The frontend can run by itself because it reads the generated JSON artifact.
+The API is required only for live service integration.
 
-```bash
-.venv/bin/pip install -r ml-service/requirements-dev.txt
-.venv/bin/python -m pytest -q ml-service/tests
-```
+## Backend responsibilities
 
-The current suite contains 14 Python tests plus a local frontend/model-contract
-test; `npm test` also performs a complete standard Next.js production build.
+- **Data pipeline:** validates identifiers and source columns, converts the
+  workbooks and produces normalized historical/upcoming records.
+- **Machine learning:** attribute matching, candidate ranking, demand
+  forecasting, hierarchy reconciliation and constrained ordering.
+- **Deep learning:** FashionCLIP-compatible image/text embeddings and
+  fine-tuning workflows.
+- **AI orchestration:** combines matching, demand forecasting and inventory
+  policy into an explainable recommendation.
 
-## Scale architecture status
+See [backend/README.md](backend/README.md) for backend commands and training
+contracts.
 
-The repository includes PostgreSQL/pgvector HNSW retrieval, a protected
-FashionCLIP embedding service, CatBoost ranking training/inference, LightGBM
-P10/P50/P90 training/inference, a MinTrace reconciliation component, constrained
-buy optimization, durable jobs, feedback capture and recommendation audit
-storage.
-
-Those components are not equivalent to trained production models. No approved
-CatBoost ranker, LightGBM demand bundle, client-tuned FashionCLIP checkpoint or
-residual covariance artifact can be fitted honestly from the current 33-row
-sample. The production configuration uses `MODEL_POLICY=require_trained` so the
-scale service fails closed when required artifacts are missing.
-
-See `ml-service/README.md` for the precise component status, API endpoints,
-training contracts and production activation checklist.
-
-## Project layout
+The production data path is:
 
 ```text
-app/                         Local planner interface and generated model artifact
-scripts/                     Workbook and image preparation
-ml-service/                  POC model, APIs, scale engine, training and tests
-embedding-service/           Isolated FashionCLIP HTTP service
-docker-compose.scale.yml     PostgreSQL, embedding, API and worker stack
-models/                      Local trained artifacts; intentionally git-ignored
+XLSB ingestion → source validation → identifier/fabric cleaning
+→ canonical snake_case schema → processed CSV export
+→ feature engineering → ML training/validation → frontend artifact
 ```
+
+The active AI evidence is limited to five business attributes: Item, Design,
+Colour, Category Type and Fabric. Season is retained only for tracing and
+temporal validation; historical outcomes remain prediction targets rather than
+similarity inputs.

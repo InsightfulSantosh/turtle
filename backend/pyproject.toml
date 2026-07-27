@@ -1,0 +1,35 @@
+[project]
+name = "turtle-season-intelligence-backend"
+version = "3.0.0"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.139.0",
+  "numpy>=2.0,<3",
+  "openpyxl>=3.1,<4",
+  "pydantic>=2.9,<3",
+  "scikit-learn>=1.6,<2",
+  "typing-extensions>=4.12,<5",
+  "uvicorn[standard]==0.51.0",
+]
+
+[project.scripts]
+turtle-export-model = "machine_learning.train_and_export:main"
+turtle-prepare-data = "data_pipeline.prepare_real_data:main"
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

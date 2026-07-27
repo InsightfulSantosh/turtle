@@ -125,7 +125,7 @@ Upcoming product attributes --> trained Ridge sales model  |
 
 ## 4. Step 1 — Attribute similarity
 
-Each upcoming product is compared with every historical product using nine
+Each upcoming product is compared with every historical product using five
 informative and comparable attributes.
 
 ### Attribute weights
@@ -134,15 +134,11 @@ These weights operate inside the attribute score and total 100%:
 
 | Attribute | Weight | Comparison method |
 |---|---:|---|
-| Pattern | 17% | Exact or related pattern-family match |
-| Category/item type | 16% | Exact match plus a strong cross-category penalty |
-| Collection/fit | 14% | Exact categorical match |
-| Fabric | 14% | Exact match or fabric-token overlap |
-| MRP/price | 11% | Smooth proportional price-distance calculation |
-| Colour | 9% | Exact colour or related colour family |
-| Sleeve | 7% | Exact categorical match |
-| Provision/fit code | 7% | Exact categorical match |
-| Season family | 5% | Normalized AW, SS or CORE family match |
+| Design | 24.29% | Exact or related design-family match |
+| Item | 22.86% | Exact match plus a strong cross-item penalty |
+| Category Type | 20% | Exact Formal, Casual, Denim or Ceremonial match |
+| Fabric | 20% | Exact match or fabric-token overlap |
+| Colour | 12.86% | Exact colour or related colour family |
 
 The attribute score is:
 
@@ -154,21 +150,21 @@ Attribute similarity = sum(attribute match x attribute weight)
 
 #### Exact categorical attributes
 
-Category, sleeve, fit code and collection/fit normally receive:
+Item and Category Type normally receive:
 
 - `100%` when the normalized values are the same;
 - `0%` when they are different.
 
-If category/item type is different, the total attribute score also receives a
+If the item is different, the total attribute score also receives a
 strong `0.42` multiplier. This prevents a visually similar T-shirt from becoming
 the leading analogue for a shirt.
 
-#### Pattern
+#### Design
 
-- Exact pattern: `100%`
-- Same mapped pattern family: `62%`
+- Exact design: `100%`
+- Same mapped design family: `62%`
 - Certain broadly related printed/check/stripe groups: `8%`
-- Unrelated pattern: `0%`
+- Unrelated design: `0%`
 
 This is why the Match evidence screen can show values such as 100%, 62%, 8% or
 0% rather than only 100% and 0%.
@@ -193,35 +189,12 @@ as completely unrelated.
 For example, `SKY BLUE` and `LIGHT BLUE` can be related even though their source
 labels are not identical.
 
-#### Price
-
-Price uses a smooth proportional distance:
-
-```text
-Price similarity = exp(-abs(log(upcoming MRP / historical MRP)) / 0.30)
-```
-
-The result decreases gradually as the proportional price difference increases.
-This is more useful than declaring two prices either exactly the same or
-completely different.
-
-#### Season family
-
-Detailed season values are normalized into business families such as:
-
-- AW
-- SS
-- CORE
-
-Two AW products can therefore match even if one is labelled AW2025 and the
-other AW2026.
-
 ### Why some workbook columns are excluded
 
 | Excluded field | Reason |
 |---|---|
-| CAT2 range | Constant after normalizing `CMI + VMI` and `VMI + CMI`; it cannot rank products |
-| CAT5 merch type | Every historical candidate is FASHION; it cannot differentiate candidates |
+| Season | Retained for tracing and temporal validation, not product matching |
+| Merchandise type | Not one of the five approved matching attributes |
 | Style and row identifiers | Codes identify a row but do not describe reusable product meaning |
 | Colour variant code | Codes such as 1001 are not stable colour semantics |
 | Order, dispatch, sales, sell-through | Outcomes would leak performance into similarity |
@@ -256,7 +229,7 @@ Visual similarity = 1 / (1 + exp((distance - median distance) / calibrated scale
 ```
 
 FashionCLIP can capture visual relationships involving garment shape, colour,
-pattern, texture, collar, sleeve and overall design. The score is a relative
+pattern, texture, collar and overall design. The score is a relative
 similarity signal, not a probability that two products are identical.
 
 If an upcoming item has no image, the application uses attribute similarity
@@ -330,15 +303,11 @@ produces a second, independent sales forecast.
 
 The pipeline derives features from:
 
-- category/item type;
-- sleeve;
-- provision/fit code;
-- mapped pattern family;
-- collection/fit;
+- item;
+- mapped design family;
+- Category Type;
 - mapped colour family;
-- AW/SS/CORE season family;
-- fabric tokens; and
-- logarithm of MRP.
+- fabric tokens.
 
 The scikit-learn pipeline is:
 
@@ -349,7 +318,7 @@ DictVectorizer -> StandardScaler -> Ridge regression
 #### DictVectorizer
 
 Converts product labels into numerical machine-learning features. For example,
-`pattern=CHECKS` and `colour=BLUE` become model-readable columns.
+`design=CHECKS` and `colour=BLUE` become model-readable columns.
 
 #### StandardScaler
 
@@ -740,8 +709,8 @@ Say:
 Show:
 
 - product image;
-- colour, price, pattern and fabric;
-- expandable nine product attributes; and
+- item, design, colour, Category Type and fabric;
+- expandable product attributes; and
 - expected sales and recommended initial order as separate outputs.
 
 ### Part C — Explain the analogue cards
@@ -859,7 +828,7 @@ replaced by:
 
 1. batch FashionCLIP embedding generation;
 2. PostgreSQL/pgvector HNSW approximate nearest-neighbour retrieval;
-3. metadata filters such as category, gender, brand and price band;
+3. metadata filters such as item, Category Type, gender and brand;
 4. CatBoost learning-to-rank trained from planner relevance feedback;
 5. LightGBM P10/P50/P90 temporal demand forecasting;
 6. hierarchical reconciliation across category/channel/region;
@@ -867,16 +836,15 @@ replaced by:
 8. temporal backtesting, drift monitoring, model registry and rollback; and
 9. persistent planner approvals and overrides for learning and audit.
 
-The repository contains the software path for these components, but the current
-33-row sample cannot honestly train and approve the production CatBoost,
-LightGBM or fine-tuned FashionCLIP artifacts.
+These components describe a future production roadmap and are intentionally not
+included in the current implementation. They should be added only after enough
+multi-season client data is available to train and validate them responsibly.
 
 ## 23. Minimum data requested for production validation
 
 - At least three complete seasons; five is preferable.
 - Consistent selling-window dates.
 - Opening stock, receipts, transfers, returns and stock-out days.
-- Original price, markdown events and promotion exposure.
 - Channel, store/region and online/offline context.
 - Size-level sales and availability where relevant.
 - Product hierarchy, brand, gender and occasion.
@@ -886,9 +854,9 @@ LightGBM or fine-tuned FashionCLIP artifacts.
 
 ## 24. One-minute executive explanation
 
-> “For every upcoming product, the platform compares nine commercial attributes
-> and a 512-dimensional FashionCLIP image representation against historical
-> products. It ranks the closest analogues and calculates a similarity-weighted
+> “For every upcoming product, the platform compares Item, Design, Colour,
+> Category Type and Fabric against historical products. It ranks the closest
+> analogues and calculates a similarity-weighted
 > sales estimate. In parallel, a trained Ridge model predicts sales from the
 > complete product feature set. The validation-selected ensemble combines both
 > forecasts. Historical out-of-fold errors produce a transparent sales range.
