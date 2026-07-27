@@ -1,5 +1,8 @@
 # Turtle Season Intelligence Backend
 
+The versioned Qdrant catalogue index and image-first retrieval workflow are
+documented in [../FASHION_MATCHING.md](../FASHION_MATCHING.md).
+
 The backend has a separate FastAPI application layer and a Python 3.12
 src-layout data-science package. It keeps API transport, data preparation,
 machine learning and deep learning concerns separate while sharing one
@@ -67,6 +70,14 @@ PYTHONPATH=backend/src .venv/bin/python -m uvicorn \
 make data
 ```
 
+To map local product images, generate fashion-domain image embeddings and
+rebuild the browser artifact with visual similarity:
+
+```bash
+.venv/bin/pip install -r backend/requirements-fashion-matching.txt
+make data-vision
+```
+
 The pipeline reads the two real `.xlsb` workbooks from `DATA/raw`, converts them
 through LibreOffice when needed, validates and cleans the records, standardizes
 both datasets to a shared snake_case schema, saves the cleaned datasets and
@@ -74,6 +85,13 @@ validation report under `DATA/processed`, excludes zero-sales historical rows
 from training, excludes upcoming item types without retained historical
 coverage, fits the current model and atomically writes
 `frontend/app/generated-data.json`.
+
+Image filenames are matched case-insensitively to catalogue product IDs from
+`DATA/raw/historical_matched_images` and
+`DATA/raw/upcoming_ss27_matched_images`. The browser intentionally lists only
+upcoming styles with mapped images and only image-backed historical analogues.
+The Next.js application serves these files through a same-origin image route,
+so `make frontend-dev` is sufficient for the planner UI.
 
 Similarity and demand features use only Item, Design, Colour, Category Type and
 Fabric. Category Type is standardized to `FORMAL`, `CASUAL`, `DENIM` or

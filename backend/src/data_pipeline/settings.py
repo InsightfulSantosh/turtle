@@ -19,7 +19,7 @@ class PipelineSettings:
     upcoming_season: str = "SS27"
 
     @classmethod
-    def from_project(cls, output_path: Path | None = None) -> "PipelineSettings":
+    def from_project(cls, output_path: Path | None = None) -> PipelineSettings:
         return cls(
             data_root=paths.data,
             temporary_root=paths.temporary,
@@ -41,6 +41,14 @@ class PipelineSettings:
     @property
     def processed_root(self) -> Path:
         return self.data_root / "processed"
+
+    @property
+    def historical_image_root(self) -> Path:
+        return self.raw_root / "historical_matched_images"
+
+    @property
+    def upcoming_image_root(self) -> Path:
+        return self.raw_root / "upcoming_ss27_matched_images"
 
     @property
     def historical_processed_output(self) -> Path:

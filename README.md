@@ -1,5 +1,9 @@
 # Turtle Season Intelligence
 
+The production image-first retrieval workflow, with separate image, text and
+structured-attribute signals, is documented in
+[FASHION_MATCHING.md](FASHION_MATCHING.md).
+
 Turtle Season Intelligence compares upcoming fashion styles with historical
 products, forecasts demand and supports an initial-order decision. The codebase
 is split into an independent Next.js frontend and a modular Python backend.

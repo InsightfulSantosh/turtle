@@ -8,11 +8,15 @@ from functools import lru_cache
 from urllib.parse import urlparse
 
 import httpx
-import torch
 from fastapi import Depends, FastAPI, Header, HTTPException
-from PIL import Image
+from PIL import Image, ImageOps
 from pydantic import BaseModel, ConfigDict, Field
-from transformers import AutoProcessor, CLIPModel
+
+from fashion_matching.encoders import (
+    EncoderError,
+    FashionEncoder,
+    create_encoder,
+)
 
 
 class ProductInput(BaseModel):
@@ -53,50 +57,91 @@ def fetch_image(url: str) -> Image.Image:
     _validate_image_host(url)
     max_bytes = int(os.getenv("MAX_IMAGE_BYTES", str(8 * 1024 * 1024)))
     timeout = httpx.Timeout(10.0, connect=4.0)
-    with httpx.Client(timeout=timeout, follow_redirects=False) as client:
-        with client.stream("GET", url, headers={"User-Agent": "TurtleSeasonIntelligence/3.0"}) as response:
-            response.raise_for_status()
-            content_type = response.headers.get("content-type", "").split(";", 1)[0]
-            if content_type not in {"image/jpeg", "image/png", "image/webp"}:
-                raise ValueError("unsupported image content type")
-            chunks: list[bytes] = []
-            total = 0
-            for chunk in response.iter_bytes():
-                total += len(chunk)
-                if total > max_bytes:
-                    raise ValueError("image exceeds configured size limit")
-                chunks.append(chunk)
+    with (
+        httpx.Client(
+            timeout=timeout,
+            follow_redirects=False,
+        ) as client,
+        client.stream(
+            "GET",
+            url,
+            headers={"User-Agent": "TurtleSeasonIntelligence/4.0"},
+        ) as response,
+    ):
+        response.raise_for_status()
+        content_type = response.headers.get("content-type", "").split(";", 1)[0]
+        if content_type not in {"image/jpeg", "image/png", "image/webp"}:
+            raise ValueError("unsupported image content type")
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in response.iter_bytes():
+            total += len(chunk)
+            if total > max_bytes:
+                raise ValueError("image exceeds configured size limit")
+            chunks.append(chunk)
     data = b"".join(chunks)
     image = Image.open(io.BytesIO(data))
     image.verify()
-    return Image.open(io.BytesIO(data)).convert("RGB")
+    decoded = Image.open(io.BytesIO(data))
+    if decoded.width * decoded.height > int(os.getenv("MAX_IMAGE_PIXELS", "40000000")):
+        raise ValueError("image exceeds configured pixel limit")
+    return ImageOps.exif_transpose(decoded).convert("RGB")
 
 
 class FashionEmbeddingRuntime:
     def __init__(self) -> None:
-        model_id = os.getenv("FASHION_MODEL_ID", "patrickjohncyh/fashion-clip")
-        self.processor = AutoProcessor.from_pretrained(model_id)
-        self.model = CLIPModel.from_pretrained(model_id)
-        self.model.eval()
-        self.model_id = model_id
-        self.image_weight = min(max(float(os.getenv("IMAGE_WEIGHT", "0.70")), 0.0), 1.0)
-
-    @torch.inference_mode()
-    def embed(self, product: ProductInput) -> list[float]:
-        text_inputs = self.processor(
-            text=[product.text or product.id],
-            return_tensors="pt",
-            padding=True,
-            truncation=True,
+        self.encoder: FashionEncoder = create_encoder(
+            os.getenv(
+                "FASHION_MODEL_ID",
+                "Marqo/marqo-fashionSigLIP",
+            ),
+            revision=os.getenv("FASHION_MODEL_REVISION", "main"),
+            device=os.getenv("FASHION_MODEL_DEVICE", "auto"),
         )
-        text_vector = torch.nn.functional.normalize(self.model.get_text_features(**text_inputs), dim=-1)
-        if product.imageUrl:
-            image_inputs = self.processor(images=[fetch_image(product.imageUrl)], return_tensors="pt")
-            image_vector = torch.nn.functional.normalize(self.model.get_image_features(**image_inputs), dim=-1)
-            vector = image_vector * self.image_weight + text_vector * (1 - self.image_weight)
-        else:
-            vector = text_vector
-        return torch.nn.functional.normalize(vector, dim=-1)[0].cpu().float().tolist()
+        self.model_id = self.encoder.model_id
+
+    def embed_batch(self, products: list[ProductInput]) -> list[dict]:
+        results = [
+            {
+                "id": product.id,
+                "imageVector": None,
+                "textVector": None,
+            }
+            for product in products
+        ]
+        image_positions = [index for index, product in enumerate(products) if product.imageUrl]
+        if image_positions:
+            images = [fetch_image(products[index].imageUrl or "") for index in image_positions]
+            vectors = self.encoder.encode_images(images)
+            for index, vector in zip(
+                image_positions,
+                vectors,
+                strict=True,
+            ):
+                results[index]["imageVector"] = vector
+
+        text_positions = [index for index, product in enumerate(products) if product.text.strip()]
+        if text_positions and self.encoder.supports_text:
+            vectors = self.encoder.encode_texts([products[index].text for index in text_positions])
+            for index, vector in zip(
+                text_positions,
+                vectors,
+                strict=True,
+            ):
+                results[index]["textVector"] = vector
+        for result in results:
+            result["availableSignals"] = [
+                signal
+                for signal, field in (
+                    ("image", "imageVector"),
+                    ("text", "textVector"),
+                )
+                if result[field] is not None
+            ]
+            # Backward-compatible alias: this is image-only and never falls
+            # back to the text vector.
+            result["vector"] = result["imageVector"]
+        return results
 
 
 @lru_cache(maxsize=1)
@@ -104,7 +149,11 @@ def runtime() -> FashionEmbeddingRuntime:
     return FashionEmbeddingRuntime()
 
 
-app = FastAPI(title="Turtle Fashion Embedding Service", version="3.0.0", redoc_url=None)
+app = FastAPI(
+    title="Turtle Fashion Embedding Service",
+    version="4.0.0",
+    redoc_url=None,
+)
 
 
 @app.get("/healthz", include_in_schema=False)
@@ -116,7 +165,12 @@ def health() -> dict:
 def create_embeddings(payload: EmbeddingRequest) -> dict:
     try:
         model = runtime()
-        embeddings = [{"id": product.id, "vector": model.embed(product)} for product in payload.products]
-    except (ValueError, httpx.HTTPError, OSError) as exc:
+        embeddings = model.embed_batch(payload.products)
+    except (EncoderError, ValueError, httpx.HTTPError, OSError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-    return {"model": model.model_id, "dimension": len(embeddings[0]["vector"]), "embeddings": embeddings}
+    return {
+        "model": model.model_id,
+        "revision": model.encoder.revision,
+        "dimension": model.encoder.dimension,
+        "embeddings": embeddings,
+    }

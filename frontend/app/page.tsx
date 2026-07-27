@@ -55,6 +55,7 @@ type UpcomingItem = {
     high: number;
     confidence: Confidence;
     matchConfidence: Confidence;
+    noSuitableMatch: boolean;
     demandUncertainty: DemandUncertainty;
     uncertaintyRatio: number;
     expectedSales: number;
@@ -142,6 +143,9 @@ type Dataset = {
       attributeWeightGrid: number[];
       attributeWeight: number;
       visualWeight: number;
+      minimumVisualScore: number;
+      minimumMatchConfidence: Confidence;
+      noMatchPolicy: string;
       topK: number;
       regressionBlend: number;
       ridgeAlpha: number;
@@ -177,6 +181,7 @@ type Decision = {
   low: number;
   high: number;
   matchConfidence: Confidence;
+  noSuitableMatch: boolean;
   demandUncertainty: DemandUncertainty;
   uncertaintyRatio: number;
   expectedSales: number;
@@ -192,8 +197,11 @@ type Decision = {
 
 const dataset = dataJson as unknown as Dataset;
 const historyById = new Map(dataset.historical.map((item) => [item.id, item]));
+const imageBackedUpcoming = dataset.upcoming.filter((item) => Boolean(item.imageUrl));
+const visibleUpcoming =
+  imageBackedUpcoming.length > 0 ? imageBackedUpcoming : dataset.upcoming;
 const productSegments = Array.from(
-  new Set(dataset.upcoming.map((item) => item.itemType)),
+  new Set(visibleUpcoming.map((item) => item.itemType)),
 ).sort();
 const visualMatchingAvailable =
   dataset.meta.visionModel.upcomingCoverage > 0 &&
@@ -268,6 +276,7 @@ function makeDecision(
   topK: number,
 ): Decision {
   const ranked = item.matches
+    .filter((match) => Boolean(historyById.get(match.historicalId)?.imageUrl))
     .map((match) => {
       const visualAvailable = match.visualScore !== null;
       const denominator = visualAvailable
@@ -294,12 +303,6 @@ function makeDecision(
   });
 
   const analogueSales = numerator / Math.max(denominator, 0.01);
-  const regressionSales = item.recommendation.regressionSales;
-  const blend = dataset.meta.model.regressionBlend;
-  const rawExpectedSales = analogueSales * (1 - blend) + regressionSales * blend;
-  const expectedSales = clamp(roundPack(rawExpectedSales), 0, 2000);
-  const sellThroughPolicy = Math.max(targetSellThrough / 100, 0.01);
-  const quantity = clamp(roundPack(expectedSales / sellThroughPolicy), 100, 2000);
   const topScore = top[0]?.combinedScore ?? 0;
   const averageTop =
     top.slice(0, 3).reduce((sum, match) => sum + match.combinedScore, 0) /
@@ -310,7 +313,6 @@ function makeDecision(
     const historical = historyById.get(match.historicalId);
     return sum + (historical?.qualityFlags.length ?? 0);
   }, 0);
-  const uncertaintyRatio = salesIntervalHalfWidth / Math.max(expectedSales, 1);
   let matchConfidence: Confidence = "Low";
   if (
     topScore >= 0.84 &&
@@ -322,6 +324,26 @@ function makeDecision(
   } else if (topScore >= 0.62 && averageTop >= 0.52) {
     matchConfidence = "Medium";
   }
+  const topVisualScore = top[0]?.visualScore;
+  const noSuitableMatch =
+    !top.length ||
+    matchConfidence === "Low" ||
+    topVisualScore === null ||
+    topVisualScore === undefined ||
+    topVisualScore < dataset.meta.model.minimumVisualScore;
+  const regressionSales = item.recommendation.regressionSales;
+  const blend = dataset.meta.model.regressionBlend;
+  const rawExpectedSales = noSuitableMatch
+    ? regressionSales
+    : analogueSales * (1 - blend) + regressionSales * blend;
+  const expectedSales = clamp(roundPack(rawExpectedSales), 0, 2000);
+  const sellThroughPolicy = Math.max(targetSellThrough / 100, 0.01);
+  const quantity = clamp(
+    roundPack(expectedSales / sellThroughPolicy),
+    100,
+    2000,
+  );
+  const uncertaintyRatio = salesIntervalHalfWidth / Math.max(expectedSales, 1);
   const demandUncertainty: DemandUncertainty =
     uncertaintyRatio <= 0.20 ? "Narrow" :
       uncertaintyRatio <= 0.40 ? "Moderate" : "Wide";
@@ -338,6 +360,7 @@ function makeDecision(
       low: item.recommendation.low,
       high: item.recommendation.high,
       matchConfidence: item.recommendation.matchConfidence,
+      noSuitableMatch: item.recommendation.noSuitableMatch,
       demandUncertainty: item.recommendation.demandUncertainty,
       uncertaintyRatio: item.recommendation.uncertaintyRatio,
       expectedSales: item.recommendation.expectedSales,
@@ -358,6 +381,7 @@ function makeDecision(
     low: clamp(roundPack(Math.max(expectedSales - salesIntervalHalfWidth, 0) / sellThroughPolicy), 100, 2000),
     high: clamp(roundPack((expectedSales + salesIntervalHalfWidth) / sellThroughPolicy), 100, 2000),
     matchConfidence,
+    noSuitableMatch,
     demandUncertainty,
     uncertaintyRatio,
     expectedSales,
@@ -384,9 +408,19 @@ function ProductImage({
   eager?: boolean;
 }) {
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
-  const failed = Boolean(src && failedSrc === src);
+  const apiBase = (
+    process.env.NEXT_PUBLIC_TURTLE_API_URL ?? "http://localhost:8080"
+  ).replace(/\/$/, "");
+  const resolvedSrc = src?.startsWith("/v1/product-images/")
+    ? src.replace("/v1/product-images/", "/product-images/")
+    : src?.startsWith("/product-images/")
+      ? src
+      : src?.startsWith("/")
+        ? `${apiBase}${src}`
+        : src;
+  const failed = Boolean(resolvedSrc && failedSrc === resolvedSrc);
 
-  if (!src || failed) {
+  if (!resolvedSrc || failed) {
     return (
       <div className={`image-fallback ${className}`} aria-label={`${alt}: image unavailable`}>
         <span>Image pending</span>
@@ -400,11 +434,11 @@ function ProductImage({
     // eslint-disable-next-line @next/next/no-img-element
     <img
       className={className}
-      src={src}
+      src={resolvedSrc}
       alt={alt}
       loading={eager ? "eager" : "lazy"}
       referrerPolicy="no-referrer"
-      onError={() => setFailedSrc(src ?? null)}
+      onError={() => setFailedSrc(resolvedSrc)}
     />
   );
 }
@@ -463,6 +497,14 @@ function MatchConfidencePill({
   );
 }
 
+function NoMatchPill() {
+  return (
+    <span className="no-match-pill">
+      No convincing visual match
+    </span>
+  );
+}
+
 function UncertaintyPill({
   uncertainty,
   detailed = false,
@@ -494,9 +536,9 @@ function ScoreRing({ score, label }: { score: number; label: string }) {
 }
 
 function App() {
-  const initialItem = dataset.upcoming.find(
+  const initialItem = visibleUpcoming.find(
     (item) => item.recommendation.matchConfidence === "High" && item.imageUrl,
-  ) ?? dataset.upcoming[0];
+  ) ?? visibleUpcoming[0];
   const [tab, setTab] = useState<Tab>("compare");
   const [selectedId, setSelectedId] = useState(initialItem.id);
   const [queueSearch, setQueueSearch] = useState("");
@@ -511,12 +553,14 @@ function App() {
   const [overrides, setOverrides] = useState<Record<string, number>>({});
   const [toast, setToast] = useState("");
 
-  const selected = dataset.upcoming.find((item) => item.id === selectedId) ?? initialItem;
+  const selected = visibleUpcoming.find((item) => item.id === selectedId) ?? initialItem;
   const decision = useMemo(
     () => makeDecision(selected, attributeWeight, visualWeight, targetSellThrough, topK),
     [selected, attributeWeight, visualWeight, targetSellThrough, topK],
   );
-  const selectedMatches = decision.ranked.slice(0, topK);
+  const selectedMatches = decision.noSuitableMatch
+    ? []
+    : decision.ranked.slice(0, topK);
 
   useEffect(() => {
     if (!toast) return;
@@ -526,7 +570,7 @@ function App() {
 
   const portfolio = useMemo(
     () =>
-      dataset.upcoming.map((item) => ({
+      visibleUpcoming.map((item) => ({
         item,
         decision: makeDecision(item, attributeWeight, visualWeight, targetSellThrough, topK),
       })),
@@ -596,6 +640,7 @@ function App() {
         "Colour",
         "Category Type",
         "Fabric",
+        "Product match status",
         "Top historical match",
         "Combined similarity",
         "Attribute similarity",
@@ -616,7 +661,9 @@ function App() {
         "Model version",
       ],
       ...portfolio.map(({ item, decision: itemDecision }) => {
-        const top = itemDecision.ranked[0];
+        const top = itemDecision.noSuitableMatch
+          ? undefined
+          : itemDecision.ranked[0];
         return [
           item.id,
           item.itemType,
@@ -624,6 +671,7 @@ function App() {
           item.colour,
           item.categoryType,
           item.fabric,
+          itemDecision.noSuitableMatch ? "No product match" : "Matched",
           top?.historicalId ?? "",
           Math.round((top?.combinedScore ?? 0) * 100),
           Math.round((top?.attributeScore ?? 0) * 100),
@@ -715,7 +763,7 @@ function App() {
                 <option value="All">All matches</option>
                 <option value="High">High match</option>
                 <option value="Medium">Medium match</option>
-                <option value="Low">Low match</option>
+                <option value="Low">No convincing match</option>
               </select>
               <select value={uncertaintyFilter} onChange={(event) => setUncertaintyFilter(event.target.value)} aria-label="Filter sales uncertainty">
                 <option value="All">All ranges</option>
@@ -742,9 +790,15 @@ function App() {
                       <span>{item.categoryType}</span>
                     </span>
                     <span className="mini-signals">
-                      <span className={`mini-confidence ${itemDecision.matchConfidence.toLowerCase()}`}>
-                        {itemDecision.matchConfidence} match
-                      </span>
+                      {itemDecision.noSuitableMatch ? (
+                        <span className="mini-confidence no-match">
+                          No product match
+                        </span>
+                      ) : (
+                        <span className={`mini-confidence ${itemDecision.matchConfidence.toLowerCase()}`}>
+                          {itemDecision.matchConfidence} match
+                        </span>
+                      )}
                       <span className={`mini-uncertainty ${itemDecision.demandUncertainty.toLowerCase()}`}>
                         {itemDecision.demandUncertainty} range
                       </span>
@@ -799,7 +853,9 @@ function App() {
                     </p>
                   </div>
                   <div className="signal-pills">
-                    <MatchConfidencePill confidence={decision.matchConfidence} detailed />
+                    {decision.noSuitableMatch
+                      ? <NoMatchPill />
+                      : <MatchConfidencePill confidence={decision.matchConfidence} detailed />}
                     <UncertaintyPill uncertainty={decision.demandUncertainty} detailed />
                   </div>
                 </div>
@@ -824,12 +880,28 @@ function App() {
                 <div className="rationale-box">
                   <span className="rationale-icon">✦</span>
                   <p>
-                    The model forecasts <b>{numberFormatter.format(decision.expectedSales)} sales units</b> independently of inventory policy. The {targetSellThrough}% target converts that forecast into the recommended initial order; changing it does not retrain or alter expected sales.
+                    {decision.noSuitableMatch ? (
+                      <>
+                        No historical product cleared the visual-match guardrail.
+                        The <b>{numberFormatter.format(decision.expectedSales)} unit sales forecast</b> therefore
+                        uses the trained product-attribute model without analogue blending.
+                      </>
+                    ) : (
+                      <>
+                        The model forecasts <b>{numberFormatter.format(decision.expectedSales)} sales units</b> independently of inventory policy. The {targetSellThrough}% target converts that forecast into the recommended initial order; changing it does not retrain or alter expected sales.
+                      </>
+                    )}
                   </p>
                 </div>
                 <div className="recommendation-metrics">
-                  <div><small>Top historical analogue</small><strong>{decision.ranked[0]?.historicalId}</strong></div>
-                  <div><small>Analogue sales forecast</small><strong>{numberFormatter.format(decision.analogueSales)} units</strong></div>
+                  <div>
+                    <small>Top historical analogue</small>
+                    <strong>{decision.noSuitableMatch ? "No product match" : decision.ranked[0]?.historicalId}</strong>
+                  </div>
+                  <div>
+                    <small>Analogue sales forecast</small>
+                    <strong>{decision.noSuitableMatch ? "Not used" : `${numberFormatter.format(decision.analogueSales)} units`}</strong>
+                  </div>
                   <div><small>Machine-learning sales forecast</small><strong>{numberFormatter.format(decision.regressionSales)} units</strong></div>
                   <div><small>Sales backtest WAPE</small><strong>{scorePercent(dataset.meta.model.backtest.wape)}</strong></div>
                 </div>
@@ -880,7 +952,13 @@ function App() {
                 <label className="select-control analogue-count-control">
                   <span>
                     <b>Products used in recommendation</b>
-                    <strong>{topK === dataset.meta.model.topK ? "Validated default" : "Custom scenario"}</strong>
+                    <strong>
+                      {decision.noSuitableMatch
+                        ? "0 — visual guardrail active"
+                        : topK === dataset.meta.model.topK
+                          ? "Validated default"
+                          : "Custom scenario"}
+                    </strong>
                   </span>
                   <select aria-label="Products used in recommendation" value={topK} onChange={(event) => {
                     setTopK(Number(event.target.value));
@@ -890,7 +968,11 @@ function App() {
                     <option value="5">5 closest products</option>
                     <option value="8">8 closest products</option>
                   </select>
-                  <small>Every selected product is shown below and contributes to the quantity calculation.</small>
+                  <small>
+                    {decision.noSuitableMatch
+                      ? "Weak candidates are excluded; the forecast does not use a historical analogue."
+                      : "Every selected product is shown below and contributes to the quantity calculation."}
+                  </small>
                 </label>
                 <div className="method-note">
                   <span>{visualMatchingAvailable ? "Visual AI + demand intelligence" : "Attribute + demand intelligence"}</span>
@@ -906,55 +988,83 @@ function App() {
             <section className="matches-section">
               <div className="section-heading">
                 <div>
-                  <span className="eyebrow">Ranked historical analogues</span>
-                  <h2>Why these styles are relevant</h2>
-                  <p className="section-supporting-copy">Showing all {topK} products used in this recommendation, selected from {dataset.meta.historicalItems} eligible historical records.</p>
+                  <span className="eyebrow">
+                    {decision.noSuitableMatch
+                      ? "Visual match guardrail"
+                      : "Ranked historical analogues"}
+                  </span>
+                  <h2>
+                    {decision.noSuitableMatch
+                      ? "No convincing product match found"
+                      : "Why these styles are relevant"}
+                  </h2>
+                  <p className="section-supporting-copy">
+                    {decision.noSuitableMatch
+                      ? `The best visual candidate did not meet the ${scorePercent(dataset.meta.model.minimumVisualScore)} minimum and is not used as sales evidence.`
+                      : `Showing all ${topK} products used in this recommendation, selected from ${dataset.meta.historicalItems} eligible historical records.`}
+                  </p>
                 </div>
                 <div className="analogue-header-tools">
-                  <span className="analogue-count-chip">{topK} used</span>
+                  <span className={`analogue-count-chip ${decision.noSuitableMatch ? "rejected" : ""}`}>
+                    {decision.noSuitableMatch ? "0 used" : `${topK} used`}
+                  </span>
                   <div className="score-legend">
                     <span><i className="attr" /> Attribute</span>
                     {visualMatchingAvailable && <span><i className="visual" /> Visual AI</span>}
                   </div>
                 </div>
               </div>
-              <div className={`match-grid match-grid-${topK}`}>
-                {selectedMatches.map((match, index) => {
-                  const historical = historyById.get(match.historicalId);
-                  if (!historical) return null;
-                  return (
-                    <article
-                      key={match.historicalId}
-                      className={`match-card ${focusedMatch?.historicalId === match.historicalId ? "active" : ""}`}
-                    >
-                      <button
-                        type="button"
-                        className="match-card-select"
-                        aria-label={`Select ${historical.id} for match evidence`}
-                        onClick={() => setFocusedHistoricalId(match.historicalId)}
+              {decision.noSuitableMatch ? (
+                <div className="no-product-match-state" role="status">
+                  <span aria-hidden="true">∅</span>
+                  <div>
+                    <strong>No historical product is shown</strong>
+                    <p>
+                      The nearest candidates remain below the visual confidence
+                      threshold. The buy forecast uses the trained
+                      product-attribute model and a wide uncertainty range.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className={`match-grid match-grid-${topK}`}>
+                  {selectedMatches.map((match, index) => {
+                    const historical = historyById.get(match.historicalId);
+                    if (!historical) return null;
+                    return (
+                      <article
+                        key={match.historicalId}
+                        className={`match-card ${focusedMatch?.historicalId === match.historicalId ? "active" : ""}`}
                       >
-                        <span className="rank">#{index + 1}</span>
-                        <ProductImage src={historical.imageUrl} alt={historical.id} className="match-image" />
-                        <div className="match-copy">
-                          <div className="match-title"><strong>{historical.id}</strong><span>{scorePercent(match.combinedScore)}</span></div>
-                          <small>{historical.season} · {historical.design} · {historical.colour}</small>
-                          <div className="dual-bars">
-                            <span><i style={{ width: `${match.attributeScore * 100}%` }} /></span>
-                            <span><i style={{ width: `${(match.visualScore ?? 0) * 100}%` }} /></span>
+                        <button
+                          type="button"
+                          className="match-card-select"
+                          aria-label={`Select ${historical.id} for match evidence`}
+                          onClick={() => setFocusedHistoricalId(match.historicalId)}
+                        >
+                          <span className="rank">#{index + 1}</span>
+                          <ProductImage src={historical.imageUrl} alt={historical.id} className="match-image" />
+                          <div className="match-copy">
+                            <div className="match-title"><strong>{historical.id}</strong><span>{scorePercent(match.combinedScore)}</span></div>
+                            <small>{historical.season} · {historical.design} · {historical.colour}</small>
+                            <div className="dual-bars">
+                              <span><i style={{ width: `${match.attributeScore * 100}%` }} /></span>
+                              <span><i style={{ width: `${(match.visualScore ?? 0) * 100}%` }} /></span>
+                            </div>
+                          </div>
+                        </button>
+                        <div className="match-card-catalog">
+                          <MatchAttributeCatalog product={historical} context="Historical" />
+                          <div className="match-performance">
+                            <span><small>Order</small><strong>{numberFormatter.format(historical.order)}</strong></span>
+                            <span><small>Sell-through</small><strong>{scorePercent(historical.sellThrough)}</strong></span>
                           </div>
                         </div>
-                      </button>
-                      <div className="match-card-catalog">
-                        <MatchAttributeCatalog product={historical} context="Historical" />
-                        <div className="match-performance">
-                          <span><small>Order</small><strong>{numberFormatter.format(historical.order)}</strong></span>
-                          <span><small>Sell-through</small><strong>{scorePercent(historical.sellThrough)}</strong></span>
-                        </div>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
+                      </article>
+                    );
+                  })}
+                </div>
+              )}
             </section>
 
             {focusedHistory && focusedMatch && (
@@ -1061,7 +1171,7 @@ function App() {
               <option>All</option>
               {productSegments.map((itemType) => <option key={itemType}>{itemType}</option>)}
             </select>
-            <select value={matchConfidenceFilter} onChange={(event) => setMatchConfidenceFilter(event.target.value)} aria-label="Filter portfolio match confidence"><option value="All">All matches</option><option value="High">High match</option><option value="Medium">Medium match</option><option value="Low">Low match</option></select>
+            <select value={matchConfidenceFilter} onChange={(event) => setMatchConfidenceFilter(event.target.value)} aria-label="Filter portfolio match confidence"><option value="All">All matches</option><option value="High">High match</option><option value="Medium">Medium match</option><option value="Low">No convincing match</option></select>
             <select value={uncertaintyFilter} onChange={(event) => setUncertaintyFilter(event.target.value)} aria-label="Filter portfolio sales uncertainty"><option value="All">All ranges</option><option value="Narrow">Narrow range</option><option value="Moderate">Moderate range</option><option value="Wide">Wide range</option></select>
             <span>{queueItems.length} results</span>
           </div>
@@ -1070,15 +1180,29 @@ function App() {
               <thead><tr><th>Upcoming style</th><th>Product attributes</th><th>Top historical analogue</th><th>Match score</th><th>Decision signals</th><th>Expected sales</th><th>Recommended buy</th><th>Planner buy</th><th><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>
                 {queueItems.map(({ item, decision: itemDecision }) => {
-                  const top = itemDecision.ranked[0];
+                  const top = itemDecision.noSuitableMatch
+                    ? undefined
+                    : itemDecision.ranked[0];
                   const historical = top ? historyById.get(top.historicalId) : undefined;
                   return (
                     <tr key={item.id}>
                       <td><div className="table-product"><ProductImage src={item.imageUrl} alt={item.id} className="table-image" /><span><strong>{item.id}</strong><small>{item.colour}</small></span></div></td>
                       <td><strong>{item.design}</strong><small>{item.categoryType} · {item.fabric}</small></td>
-                      <td>{historical && <div className="table-product"><ProductImage src={historical.imageUrl} alt={historical.id} className="table-image" /><span><strong>{historical.id}</strong><small>{historical.season} · ST {scorePercent(historical.sellThrough)}</small></span></div>}</td>
-                      <td><strong className="match-score">{scorePercent(top?.combinedScore ?? 0)}</strong><small>Attr {scorePercent(top?.attributeScore ?? 0)} · Visual {scorePercent(top?.visualScore ?? null)}</small></td>
-                      <td><div className="table-signals"><MatchConfidencePill confidence={itemDecision.matchConfidence} detailed /><UncertaintyPill uncertainty={itemDecision.demandUncertainty} detailed /></div></td>
+                      <td>
+                        {historical ? (
+                          <div className="table-product"><ProductImage src={historical.imageUrl} alt={historical.id} className="table-image" /><span><strong>{historical.id}</strong><small>{historical.season} · ST {scorePercent(historical.sellThrough)}</small></span></div>
+                        ) : (
+                          <strong className="no-match-table-label">No product match</strong>
+                        )}
+                      </td>
+                      <td>
+                        {top ? (
+                          <><strong className="match-score">{scorePercent(top.combinedScore)}</strong><small>Attr {scorePercent(top.attributeScore)} · Visual {scorePercent(top.visualScore)}</small></>
+                        ) : (
+                          <><strong className="no-match-table-label">Below threshold</strong><small>Candidate suppressed</small></>
+                        )}
+                      </td>
+                      <td><div className="table-signals">{itemDecision.noSuitableMatch ? <NoMatchPill /> : <MatchConfidencePill confidence={itemDecision.matchConfidence} detailed />}<UncertaintyPill uncertainty={itemDecision.demandUncertainty} detailed /></div></td>
                       <td><strong>{numberFormatter.format(itemDecision.expectedSales)}</strong><small>{numberFormatter.format(itemDecision.salesLow)}–{numberFormatter.format(itemDecision.salesHigh)} forecast</small></td>
                       <td><strong>{numberFormatter.format(itemDecision.quantity)}</strong><small>{numberFormatter.format(itemDecision.low)}–{numberFormatter.format(itemDecision.high)}</small></td>
                       <td><strong>{overrides[item.id] ? numberFormatter.format(overrides[item.id]) : "—"}</strong><small>{overrides[item.id] ? "Adjusted" : "Pending"}</small></td>

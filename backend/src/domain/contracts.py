@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -58,4 +59,5 @@ def product_text(product: Mapping[str, Any]) -> str:
         "fabric",
         "colour",
     )
-    return " | ".join(str(product.get(field) or "") for field in fields)
+    values = [" ".join(str(product.get(field) or "").split()).strip() for field in fields]
+    return " | ".join(value for value in values if value)

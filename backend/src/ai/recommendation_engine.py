@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import numpy as np
 
@@ -29,8 +30,7 @@ class RecommendationRuntime:
         self.meta = self.artifact["meta"]
         self.model = dict(self.meta["model"])
         self.attribute_weights = {
-            str(name): float(weight)
-            for name, weight in self.model.get("attributeWeights", {}).items()
+            str(name): float(weight) for name, weight in self.model.get("attributeWeights", {}).items()
         } or None
         self.history = self.artifact["historical"]
         self.targets = np.asarray(
@@ -63,13 +63,15 @@ class RecommendationRuntime:
             )
             visual = visual_scores.get(historical["id"])
             hybrid = combined_similarity(attribute, visual, attribute_weight)
-            matches.append({
-                "historicalId": historical["id"],
-                "attributeScore": round(attribute, 4),
-                "visualScore": visual,
-                "hybridScore": round(hybrid, 4),
-                "attributeBreakdown": breakdown,
-            })
+            matches.append(
+                {
+                    "historicalId": historical["id"],
+                    "attributeScore": round(attribute, 4),
+                    "visualScore": visual,
+                    "hybridScore": round(hybrid, 4),
+                    "attributeBreakdown": breakdown,
+                }
+            )
 
         matches.sort(key=lambda match: match["hybridScore"], reverse=True)
         result = recommend_one(
@@ -105,12 +107,16 @@ class RecommendationRuntime:
             result["expectedSales"],
             result["salesIntervalHalfWidth"],
         )
+        no_suitable_match = bool(result["noSuitableMatch"])
+        warnings = ["attribute_only"] if not visual_scores else []
+        if no_suitable_match:
+            warnings.append("no_suitable_visual_match")
 
         return {
             "requestId": str(uuid.uuid4()),
             "productId": item["id"],
             "modelVersion": self.model["version"],
             "recommendation": result,
-            "matches": matches[: int(self.model["topK"])],
-            "warnings": ["attribute_only"] if not visual_scores else [],
+            "matches": ([] if no_suitable_match else matches[: int(self.model["topK"])]),
+            "warnings": warnings,
         }

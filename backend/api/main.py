@@ -4,17 +4,21 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 import uuid
+from functools import lru_cache
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from ai.recommendation_engine import RecommendationRuntime
 from core.config import paths
-
+from data_pipeline.images import resolve_catalog_image
 
 LOGGER = logging.getLogger("turtle.backend")
 logging.basicConfig(
@@ -57,9 +61,7 @@ app = FastAPI(
 )
 
 allowed_origins = [
-    origin.strip()
-    for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
-    if origin.strip()
+    origin.strip() for origin in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if origin.strip()
 ]
 app.add_middleware(
     CORSMiddleware,
@@ -99,6 +101,31 @@ def health() -> dict:
     return {"status": "ok", "modelVersion": RUNTIME.model["version"]}
 
 
+@lru_cache(maxsize=2_048)
+def _product_image_path(catalog: str, image_id: str) -> Path | None:
+    roots = {
+        "historical": paths.data / "raw" / "historical_matched_images",
+        "upcoming": paths.data / "raw" / "upcoming_ss27_matched_images",
+    }
+    root = roots.get(catalog)
+    if root is None or re.fullmatch(r"[A-Za-z0-9-]{3,80}", image_id) is None:
+        return None
+    return resolve_catalog_image(root, image_id)
+
+
+@app.get("/v1/product-images/{catalog}/{image_id}", include_in_schema=False)
+def product_image(catalog: str, image_id: str) -> FileResponse:
+    """Serve a mapped local product image to the browser without exposing paths."""
+
+    image_path = _product_image_path(catalog, image_id)
+    if image_path is None:
+        raise HTTPException(status_code=404, detail="Product image not found")
+    return FileResponse(
+        image_path,
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
 @app.get("/v1/model", dependencies=[Depends(require_api_key)])
 def model_card() -> dict:
     return {
@@ -120,12 +147,16 @@ def existing_recommendation(item_id: str) -> dict:
     )
     if item is None:
         raise HTTPException(status_code=404, detail="Upcoming item not found")
+    no_suitable_match = bool(item["recommendation"].get("noSuitableMatch"))
+    warnings = list(item.get("modelFlags", []))
+    if no_suitable_match:
+        warnings.append("no_suitable_visual_match")
     return {
         "productId": item_id,
         "modelVersion": RUNTIME.model["version"],
         "recommendation": item["recommendation"],
-        "matches": item["matches"][: int(RUNTIME.model["topK"])],
-        "warnings": item.get("modelFlags", []),
+        "matches": ([] if no_suitable_match else item["matches"][: int(RUNTIME.model["topK"])]),
+        "warnings": warnings,
     }
 
 

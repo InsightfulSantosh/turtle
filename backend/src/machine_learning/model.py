@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Iterable
+from datetime import UTC, datetime
+from typing import Any
 
 import numpy as np
 from sklearn.feature_extraction import DictVectorizer
@@ -14,12 +15,12 @@ from sklearn.model_selection import LeaveOneOut, ParameterGrid
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-
 MODEL_VERSION = "4.2.0"
 DEFAULT_TARGET_SELL_THROUGH = 0.70
 PACK_SIZE = 25
 MIN_BUY = 100
 MAX_BUY = 2_000
+MIN_CONVINCING_VISUAL_SCORE = 0.50
 
 DESIGN_FAMILY = {
     "DIGITAL PRINT": "PRINT",
@@ -125,18 +126,17 @@ EXCLUDED_NON_COMPARISON_FIELDS = (
         "historicalColumn": "season",
         "upcomingColumn": "season",
         "reason": (
-            "Season supports tracing and temporal validation but is outside "
-            "the five approved product attributes."
+            "Season supports tracing and temporal validation but is outside the five approved product attributes."
         ),
     },
     {
         "label": "Demand outcomes",
-        "historicalColumn": (
-            "total_order_quantity, dispatch_quantity, "
-            "sales_quantity, sell_through"
-        ),
+        "historicalColumn": ("total_order_quantity, dispatch_quantity, sales_quantity, sell_through"),
         "upcomingColumn": "—",
-        "reason": "These fields train and validate the quantity forecast; using them in product similarity would leak outcomes.",
+        "reason": (
+            "These fields train and validate the quantity forecast; using them "
+            "in product similarity would leak outcomes."
+        ),
     },
 )
 
@@ -158,11 +158,7 @@ def attribute_value(item: dict[str, Any], name: str) -> Any:
 
 
 def populated_attribute_values(items: list[dict[str, Any]], name: str) -> set[Any]:
-    return {
-        value
-        for item in items
-        if (value := attribute_value(item, name)) not in ("", 0.0)
-    }
+    return {value for item in items if (value := attribute_value(item, name)) not in ("", 0.0)}
 
 
 def informative_attribute_weights(
@@ -181,10 +177,7 @@ def informative_attribute_weights(
         name: weight
         for name, weight in BASE_ATTRIBUTE_WEIGHTS.items()
         if len(populated_attribute_values(history, name)) > 1
-        and (
-            upcoming is None
-            or len(populated_attribute_values(upcoming, name)) > 0
-        )
+        and (upcoming is None or len(populated_attribute_values(upcoming, name)) > 0)
     }
     total = sum(active.values())
     if not active or total <= 0:
@@ -206,29 +199,33 @@ def attribute_audit(
         mapped_columns = column_map.get(name, {})
         historical_values = populated_attribute_values(history, name)
         upcoming_values = populated_attribute_values(upcoming, name)
-        active.append({
-            "key": name,
-            "label": label,
-            "historicalColumn": mapped_columns.get("historicalColumn", historical_column),
-            "upcomingColumn": mapped_columns.get("upcomingColumn", upcoming_column),
-            "weight": round(weight, 4),
-            "historicalUnique": len(historical_values),
-            "upcomingUnique": len(upcoming_values),
-            "method": method,
-        })
+        active.append(
+            {
+                "key": name,
+                "label": label,
+                "historicalColumn": mapped_columns.get("historicalColumn", historical_column),
+                "upcomingColumn": mapped_columns.get("upcomingColumn", upcoming_column),
+                "weight": round(weight, 4),
+                "historicalUnique": len(historical_values),
+                "upcomingUnique": len(upcoming_values),
+                "method": method,
+            }
+        )
     automatically_excluded = []
     for name in sorted(BASE_ATTRIBUTE_WEIGHTS.keys() - weights.keys()):
         label, historical_column, upcoming_column, _ = ATTRIBUTE_SCHEMA[name]
         mapped_columns = column_map.get(name, {})
-        automatically_excluded.append({
-            "label": label,
-            "historicalColumn": mapped_columns.get("historicalColumn", historical_column),
-            "upcomingColumn": mapped_columns.get("upcomingColumn", upcoming_column),
-            "reason": (
-                "Automatically excluded because the field is missing from one workbook "
-                "or cannot distinguish historical candidates."
-            ),
-        })
+        automatically_excluded.append(
+            {
+                "label": label,
+                "historicalColumn": mapped_columns.get("historicalColumn", historical_column),
+                "upcomingColumn": mapped_columns.get("upcomingColumn", upcoming_column),
+                "reason": (
+                    "Automatically excluded because the field is missing from one workbook "
+                    "or cannot distinguish historical candidates."
+                ),
+            }
+        )
     excluded_constants = source_meta.get(
         "excludedConstantAttributes",
         list(EXCLUDED_CONSTANT_ATTRIBUTES),
@@ -301,16 +298,12 @@ def attribute_similarity(
     comparable_weights = {
         name: weight
         for name, weight in active_weights.items()
-        if attribute_value(left, name) not in ("", 0.0)
-        and attribute_value(right, name) not in ("", 0.0)
+        if attribute_value(left, name) not in ("", 0.0) and attribute_value(right, name) not in ("", 0.0)
     }
     weight_total = sum(comparable_weights.values())
     if weight_total <= 0:
         return 0.0, {}
-    comparable_weights = {
-        name: weight / weight_total
-        for name, weight in comparable_weights.items()
-    }
+    comparable_weights = {name: weight / weight_total for name, weight in comparable_weights.items()}
     item_type = categorical(left.get("itemType"), right.get("itemType"))
     values = {
         "item": item_type,
@@ -319,7 +312,10 @@ def attribute_similarity(
             left.get("categoryType"),
             right.get("categoryType"),
         ),
-        "fabric": max(categorical(left.get("fabric"), right.get("fabric")), jaccard(left.get("fabric"), right.get("fabric"))),
+        "fabric": max(
+            categorical(left.get("fabric"), right.get("fabric")),
+            jaccard(left.get("fabric"), right.get("fabric")),
+        ),
         "colour": colour_similarity(left.get("colour"), right.get("colour")),
     }
     values = {name: values[name] for name in comparable_weights}
@@ -415,20 +411,19 @@ def demand_features(item: dict[str, Any]) -> dict[str, float]:
         "category_type": norm(item.get("categoryType")),
         "colour": COLOUR_FAMILY.get(colour, colour),
     }
-    features = {
-        f"{field}={value or 'UNKNOWN'}": 1.0
-        for field, value in categorical_values.items()
-    }
+    features = {f"{field}={value or 'UNKNOWN'}": 1.0 for field, value in categorical_values.items()}
     features.update({f"fabric={token}": 1.0 for token in token_set(item.get("fabric"))})
     return features
 
 
 def build_demand_pipeline(alpha: float) -> Pipeline:
-    return Pipeline([
-        ("features", DictVectorizer(sparse=True)),
-        ("scale", StandardScaler(with_mean=False)),
-        ("ridge", Ridge(alpha=alpha, solver="lsqr")),
-    ])
+    return Pipeline(
+        [
+            ("features", DictVectorizer(sparse=True)),
+            ("scale", StandardScaler(with_mean=False)),
+            ("ridge", Ridge(alpha=alpha, solver="lsqr")),
+        ]
+    )
 
 
 def fit_demand_pipeline(
@@ -510,15 +505,10 @@ def temporal_backtest_model(
     ridge_by_alpha: dict[float, np.ndarray] = {}
     for alpha in candidate_alphas:
         pipeline = fit_demand_pipeline(train_items, targets[train_indices], alpha)
-        ridge_by_alpha[alpha] = pipeline.predict(
-            [demand_features(item) for item in holdout_items]
-        )
+        ridge_by_alpha[alpha] = pipeline.predict([demand_features(item) for item in holdout_items])
 
     has_visual = bool(np.isfinite(visual_matrix).any())
-    attribute_weights = (
-        [round(value / 10, 1) for value in range(1, 10)]
-        if has_visual else [1.0]
-    )
+    attribute_weights = [round(value / 10, 1) for value in range(1, 10)] if has_visual else [1.0]
     analogue_predictions: dict[tuple[float, int], np.ndarray] = {}
     for config in ParameterGrid({"attributeWeight": attribute_weights, "topK": [3, 5, 8]}):
         attribute_weight = float(config["attributeWeight"])
@@ -538,12 +528,14 @@ def temporal_backtest_model(
         analogue_predictions[(attribute_weight, top_k)] = np.asarray(predictions)
 
     best: dict[str, Any] | None = None
-    search = ParameterGrid({
-        "attributeWeight": attribute_weights,
-        "regressionBlend": [0.15, 0.25, 0.35, 0.50],
-        "ridgeAlpha": list(candidate_alphas),
-        "topK": [3, 5, 8],
-    })
+    search = ParameterGrid(
+        {
+            "attributeWeight": attribute_weights,
+            "regressionBlend": [0.15, 0.25, 0.35, 0.50],
+            "ridgeAlpha": list(candidate_alphas),
+            "topK": [3, 5, 8],
+        }
+    )
     holdout_targets = targets[holdout_indices]
     for config in search:
         attribute_weight = float(config["attributeWeight"])
@@ -570,20 +562,14 @@ def temporal_backtest_model(
     predictions = np.asarray(best["predictions"])
     residuals = np.abs(predictions - holdout_targets)
     interval = finite_sample_quantile(residuals, coverage=0.80)
-    bias = float(
-        (predictions - holdout_targets).sum()
-        / max(holdout_targets.sum(), 1e-9)
-    )
+    bias = float((predictions - holdout_targets).sum() / max(holdout_targets.sum(), 1e-9))
     coverage = float(np.mean(residuals <= interval))
     demand_pipeline = fit_demand_pipeline(
         history,
         targets,
         float(best["ridgeAlpha"]),
     )
-    training_seasons = sorted({
-        norm(history[int(index)].get("season"))
-        for index in train_indices
-    }, key=season_sort_key)
+    training_seasons = sorted({norm(history[int(index)].get("season")) for index in train_indices}, key=season_sort_key)
     return {
         **{key: value for key, value in best.items() if not isinstance(value, np.ndarray)},
         "predictions": predictions,
@@ -597,10 +583,7 @@ def temporal_backtest_model(
         },
         "demandPipeline": demand_pipeline,
         "selectionMethod": "Temporal holdout + ParameterGrid",
-        "evaluation": (
-            f"Forward holdout: {', '.join(training_seasons)} used to predict "
-            f"{latest_season}"
-        ),
+        "evaluation": (f"Forward holdout: {', '.join(training_seasons)} used to predict {latest_season}"),
         "validationRows": int(holdout_indices.size),
         "attributeWeightGrid": attribute_weights,
     }
@@ -635,9 +618,7 @@ def backtest_model(
             train_items = [history[int(index)] for index in train_indices]
             holdout_items = [history[int(index)] for index in holdout_indices]
             pipeline = fit_demand_pipeline(train_items, targets[train_indices], alpha)
-            predictions[holdout_indices] = pipeline.predict(
-                [demand_features(item) for item in holdout_items]
-            )
+            predictions[holdout_indices] = pipeline.predict([demand_features(item) for item in holdout_items])
         ridge_by_alpha[alpha] = predictions
 
     best: dict[str, Any] | None = None
@@ -661,12 +642,14 @@ def backtest_model(
             predictions.append(prediction)
         analogue_predictions[(attribute_weight, top_k)] = np.asarray(predictions)
 
-    search = ParameterGrid({
-        "attributeWeight": attribute_weights,
-        "regressionBlend": [0.15, 0.25, 0.35, 0.50],
-        "ridgeAlpha": list(candidate_alphas),
-        "topK": [3, 5, 8],
-    })
+    search = ParameterGrid(
+        {
+            "attributeWeight": attribute_weights,
+            "regressionBlend": [0.15, 0.25, 0.35, 0.50],
+            "ridgeAlpha": list(candidate_alphas),
+            "topK": [3, 5, 8],
+        }
+    )
     for config in search:
         attribute_weight = float(config["attributeWeight"])
         top_k = int(config["topK"])
@@ -743,6 +726,18 @@ def demand_uncertainty(quantity: float, interval_half_width: float) -> str:
     return "Wide"
 
 
+def no_suitable_product_match(
+    selected: list[dict[str, Any]],
+    relevance: str,
+) -> bool:
+    """Reject weak or non-visual candidates instead of presenting a false match."""
+
+    if not selected or relevance == "Low":
+        return True
+    visual_score = selected[0].get("visualScore")
+    return visual_score is None or float(visual_score) < MIN_CONVINCING_VISUAL_SCORE
+
+
 def recommend_one(
     item: dict[str, Any],
     history: list[dict[str, Any]],
@@ -759,23 +754,26 @@ def recommend_one(
     analogue_sales = float(np.average(selected_targets, weights=weights))
     regression_sales = float(demand_pipeline.predict([demand_features(item)])[0])
     regression_sales = clamp(regression_sales, 0, MAX_BUY)
+    top_scores = [float(match["hybridScore"]) for match in selected]
+    top_visual_available = bool(selected and selected[0].get("visualScore") is not None)
+    issue_count = sum(len(quality_flags(history[history_index[match["historicalId"]]])) for match in selected[:3])
+    relevance = match_confidence(
+        top_scores,
+        top_visual_available,
+        issue_count,
+    )
+    no_suitable_match = no_suitable_product_match(selected, relevance)
     blend = float(model["regressionBlend"])
-    raw_sales = analogue_sales * (1 - blend) + regression_sales * blend
+    raw_sales = regression_sales if no_suitable_match else analogue_sales * (1 - blend) + regression_sales * blend
     expected_sales = int(clamp(round_pack(raw_sales), 0, MAX_BUY))
     target_sell_through = max(
         float(model.get("targetSellThrough", DEFAULT_TARGET_SELL_THROUGH)),
         0.01,
     )
     quantity = int(clamp(round_pack(expected_sales / target_sell_through), MIN_BUY, MAX_BUY))
-    top_scores = [float(match["hybridScore"]) for match in selected]
-    top_visual_available = bool(selected and selected[0].get("visualScore") is not None)
-    sales_interval = float(
-        model.get("salesConformalHalfWidth", model["conformalHalfWidth"])
-    ) * (
+    sales_interval = float(model.get("salesConformalHalfWidth", model["conformalHalfWidth"])) * (
         1.0 + max(0.0, 0.7 - (top_scores[0] if top_scores else 0.0))
     )
-    issue_count = sum(len(quality_flags(history[history_index[match["historicalId"]]])) for match in selected[:3])
-    relevance = match_confidence(top_scores, top_visual_available, issue_count)
     uncertainty = demand_uncertainty(expected_sales, sales_interval)
     sales_low = int(clamp(round_pack(expected_sales - sales_interval), 0, MAX_BUY))
     sales_high = int(clamp(round_pack(expected_sales + sales_interval), 0, MAX_BUY))
@@ -789,6 +787,7 @@ def recommend_one(
         "salesLow": sales_low,
         "salesHigh": sales_high,
         "matchConfidence": relevance,
+        "noSuitableMatch": no_suitable_match,
         "demandUncertainty": uncertainty,
         "uncertaintyRatio": round(sales_interval / max(expected_sales, 1.0), 4),
         "confidence": relevance,
@@ -808,16 +807,25 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
     upcoming = [dict(item) for item in source["upcoming"]]
     active_attribute_weights = informative_attribute_weights(history, upcoming)
     rows = vision_output.get("distances", [])
-    distance_map = {
-        (str(row["leftId"]), str(row["rightId"])): float(row["distance"])
-        for row in rows
-    }
-    calibration_values = [
+    distance_map = {(str(row["leftId"]), str(row["rightId"])): float(row["distance"]) for row in rows}
+    historical_ids = {str(item["id"]) for item in history}
+    upcoming_ids = {str(item["id"]) for item in upcoming}
+    historical_calibration_values = [
         float(row["distance"])
         for row in rows
-        if row["leftId"] != row["rightId"]
+        if str(row["leftId"]) in historical_ids
+        and str(row["rightId"]) in historical_ids
+        and row["leftId"] != row["rightId"]
     ]
-    calibration = calibrate_vision(calibration_values)
+    serving_calibration_values = [
+        float(row["distance"])
+        for row in rows
+        if str(row["leftId"]) in upcoming_ids and str(row["rightId"]) in historical_ids
+    ]
+    historical_calibration = calibrate_vision(historical_calibration_values)
+    serving_calibration = calibrate_vision(
+        serving_calibration_values or historical_calibration_values,
+    )
 
     count = len(history)
     attribute_matrix = np.eye(count, dtype=np.float64)
@@ -827,13 +835,13 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
             attribute, _ = attribute_similarity(left, right, active_attribute_weights)
             attribute_matrix[left_index, right_index] = attribute
             distance = distance_map.get((left["id"], right["id"]))
-            visual = calibration.similarity(distance)
+            visual = historical_calibration.similarity(distance)
             if visual is not None:
                 visual_matrix[left_index, right_index] = visual
 
     targets = np.asarray([sales_target(item) for item in history], dtype=np.float64)
     fitted = backtest_model(history, attribute_matrix, visual_matrix, targets)
-    for item, target in zip(history, targets):
+    for item, target in zip(history, targets, strict=True):
         # Retain enough precision for API-side reproduction after loading the
         # artifact. Sales and final order recommendations are pack-rounded later.
         item["salesTarget"] = round(float(target), 4)
@@ -848,22 +856,25 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
     uncertainty_counts = {"Narrow": 0, "Moderate": 0, "Wide": 0}
     all_attribute_scores: list[float] = []
     all_visual_scores: list[float] = []
+    retrieval_history = [historical for historical in history if historical.get("imageUrl")] or history
     for item in upcoming:
         matches: list[dict[str, Any]] = []
-        for historical in history:
+        for historical in retrieval_history:
             attribute, breakdown = attribute_similarity(item, historical, active_attribute_weights)
             all_attribute_scores.append(attribute)
-            visual = calibration.similarity(distance_map.get((item["id"], historical["id"])))
+            visual = serving_calibration.similarity(distance_map.get((item["id"], historical["id"])))
             if visual is not None:
                 all_visual_scores.append(visual)
             hybrid = combined_similarity(attribute, visual, attribute_weight)
-            matches.append({
-                "historicalId": historical["id"],
-                "attributeScore": round(attribute, 4),
-                "visualScore": visual,
-                "hybridScore": round(hybrid, 4),
-                "attributeBreakdown": breakdown,
-            })
+            matches.append(
+                {
+                    "historicalId": historical["id"],
+                    "attributeScore": round(attribute, 4),
+                    "visualScore": visual,
+                    "hybridScore": round(hybrid, 4),
+                    "attributeBreakdown": breakdown,
+                }
+            )
         matches.sort(key=lambda match: match["hybridScore"], reverse=True)
         item["recommendation"] = recommend_one(
             item,
@@ -877,6 +888,8 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
         model_flags = list(item.get("modelFlags", []))
         if matches and matches[0]["visualScore"] is None:
             model_flags.append("missing_image")
+        if item["recommendation"]["noSuitableMatch"]:
+            model_flags.append("no_suitable_match")
         item["modelFlags"] = list(dict.fromkeys(model_flags))
         match_confidence_counts[item["recommendation"]["matchConfidence"]] += 1
         uncertainty_counts[item["recommendation"]["demandUncertainty"]] += 1
@@ -889,70 +902,94 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
     meta = dict(source.get("meta", {}))
     source_quality = dict(meta.get("dataQuality", {}))
     source_quality.update(anomaly_counts)
-    meta.update({
-        "title": "Turtle Season Intelligence AI",
-        "generatedAt": datetime.now(timezone.utc).isoformat(),
-        "confidenceCounts": match_confidence_counts,
-        "matchConfidenceCounts": match_confidence_counts,
-        "demandUncertaintyCounts": uncertainty_counts,
-        "attributeScoreRange": (
-            [round(min(all_attribute_scores), 3), round(max(all_attribute_scores), 3)]
-            if all_attribute_scores else [0, 0]
-        ),
-        "visualScoreRange": [round(min(all_visual_scores), 3), round(max(all_visual_scores), 3)] if all_visual_scores else [0, 0],
-        "visualMethod": vision_output.get("engine", "FashionCLIP image embedding"),
-        "attributeAudit": attribute_audit(
-            history,
-            upcoming,
-            active_attribute_weights,
-            source_meta=meta,
-        ),
-        "visionModel": {
-            "modelId": vision_output.get("modelId", "unknown"),
-            "modelRevision": vision_output.get("modelRevision"),
-            "embeddingDimension": vision_output.get("embeddingDimension"),
-            "device": vision_output.get("device", "unknown"),
-            "historicalCoverage": vision_output.get("historicalCoverage", 0),
-            "upcomingCoverage": vision_output.get("upcomingCoverage", 0),
-        },
-        "model": {
-            "version": MODEL_VERSION,
-            "status": "Real-data pilot — production architecture",
-            "trainingRows": count,
-            "validationRows": int(fitted["validationRows"]),
-            "targetSellThrough": DEFAULT_TARGET_SELL_THROUGH,
-            "algorithm": (
-                "Attribute retrieval + scikit-learn Ridge sales forecast + inventory policy"
-                if not all_visual_scores
-                else "Calibrated FashionCLIP retrieval + scikit-learn Ridge sales forecast + inventory policy"
+    meta.update(
+        {
+            "title": "Turtle Season Intelligence AI",
+            "generatedAt": datetime.now(UTC).isoformat(),
+            "confidenceCounts": match_confidence_counts,
+            "matchConfidenceCounts": match_confidence_counts,
+            "demandUncertaintyCounts": uncertainty_counts,
+            "attributeScoreRange": (
+                [round(min(all_attribute_scores), 3), round(max(all_attribute_scores), 3)]
+                if all_attribute_scores
+                else [0, 0]
             ),
-            "demandLibrary": "scikit-learn",
-            "demandPipeline": "DictVectorizer + StandardScaler + Ridge",
-            "forecastTarget": "Cleaned positive historical unit sales",
-            "orderPolicy": "Expected sales divided by target sell-through",
-            "modelSelection": fitted["selectionMethod"],
-            "attributeWeights": {name: round(weight, 4) for name, weight in active_attribute_weights.items()},
-            "attributeWeightGrid": fitted["attributeWeightGrid"],
-            "attributeWeight": round(attribute_weight, 2),
-            "visualWeight": round(1 - attribute_weight, 2),
-            "topK": int(fitted["topK"]),
-            "regressionBlend": float(fitted["regressionBlend"]),
-            "ridgeAlpha": float(fitted["ridgeAlpha"]),
-            "backtest": fitted["metrics"],
-            "evaluation": fitted["evaluation"],
-            "interval": "Finite-sample 80% conformal interval for expected sales from out-of-fold residuals",
-            "salesConformalHalfWidth": round_pack(float(fitted["conformalHalfWidth"])),
-            "conformalHalfWidth": round_pack(float(fitted["conformalHalfWidth"])),
-        },
-        "visionCalibration": {
-            "medianDistance": round(calibration.median, 4),
-            "q10Distance": round(calibration.q10, 4),
-            "q90Distance": round(calibration.q90, 4),
-            "method": vision_output.get(
-                "calibrationMethod",
-                "Robust logistic calibration of neural embedding distance",
+            "visualScoreRange": (
+                [
+                    round(min(all_visual_scores), 3),
+                    round(max(all_visual_scores), 3),
+                ]
+                if all_visual_scores
+                else [0, 0]
             ),
-        },
-        "dataQuality": source_quality,
-    })
+            "visualMethod": vision_output.get("engine", "FashionCLIP image embedding"),
+            "attributeAudit": attribute_audit(
+                history,
+                upcoming,
+                active_attribute_weights,
+                source_meta=meta,
+            ),
+            "visionModel": {
+                "modelId": vision_output.get("modelId", "unknown"),
+                "modelRevision": vision_output.get("modelRevision"),
+                "embeddingDimension": vision_output.get("embeddingDimension"),
+                "device": vision_output.get("device", "unknown"),
+                "historicalCoverage": vision_output.get("historicalCoverage", 0),
+                "upcomingCoverage": vision_output.get("upcomingCoverage", 0),
+            },
+            "model": {
+                "version": MODEL_VERSION,
+                "status": "Real-data pilot — production architecture",
+                "trainingRows": count,
+                "validationRows": int(fitted["validationRows"]),
+                "targetSellThrough": DEFAULT_TARGET_SELL_THROUGH,
+                "algorithm": (
+                    "Attribute retrieval + scikit-learn Ridge sales forecast + inventory policy"
+                    if not all_visual_scores
+                    else "Calibrated FashionCLIP retrieval + scikit-learn Ridge sales forecast + inventory policy"
+                ),
+                "demandLibrary": "scikit-learn",
+                "demandPipeline": "DictVectorizer + StandardScaler + Ridge",
+                "forecastTarget": "Cleaned positive historical unit sales",
+                "orderPolicy": "Expected sales divided by target sell-through",
+                "modelSelection": fitted["selectionMethod"],
+                "attributeWeights": {name: round(weight, 4) for name, weight in active_attribute_weights.items()},
+                "attributeWeightGrid": fitted["attributeWeightGrid"],
+                "attributeWeight": round(attribute_weight, 2),
+                "visualWeight": round(1 - attribute_weight, 2),
+                "minimumVisualScore": MIN_CONVINCING_VISUAL_SCORE,
+                "minimumMatchConfidence": "Medium",
+                "noMatchPolicy": (
+                    "Show no product match when the best candidate has low "
+                    "confidence, lacks a visual score, or falls below the visual "
+                    "similarity threshold. Use the regression forecast without "
+                    "analogue blending in that case."
+                ),
+                "topK": int(fitted["topK"]),
+                "regressionBlend": float(fitted["regressionBlend"]),
+                "ridgeAlpha": float(fitted["ridgeAlpha"]),
+                "backtest": fitted["metrics"],
+                "evaluation": fitted["evaluation"],
+                "interval": "Finite-sample 80% conformal interval for expected sales from out-of-fold residuals",
+                "salesConformalHalfWidth": round_pack(float(fitted["conformalHalfWidth"])),
+                "conformalHalfWidth": round_pack(float(fitted["conformalHalfWidth"])),
+            },
+            "visionCalibration": {
+                "medianDistance": round(serving_calibration.median, 4),
+                "q10Distance": round(serving_calibration.q10, 4),
+                "q90Distance": round(serving_calibration.q90, 4),
+                "historicalMedianDistance": round(historical_calibration.median, 4),
+                "historicalQ10Distance": round(historical_calibration.q10, 4),
+                "historicalQ90Distance": round(historical_calibration.q90, 4),
+                "servingMedianDistance": round(serving_calibration.median, 4),
+                "servingQ10Distance": round(serving_calibration.q10, 4),
+                "servingQ90Distance": round(serving_calibration.q90, 4),
+                "method": vision_output.get(
+                    "calibrationMethod",
+                    "Robust logistic calibration of neural embedding distance",
+                ),
+            },
+            "dataQuality": source_quality,
+        }
+    )
     return {"meta": meta, "historical": history, "upcoming": upcoming}

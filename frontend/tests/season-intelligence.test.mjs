@@ -18,10 +18,18 @@ test("keeps the local application and fitted model contract intact", async () =>
   assert.equal(artifact.meta.dataMode, "real");
   assert.equal(artifact.meta.upcomingSeason, "SS27");
   assert.equal(artifact.meta.model.demandLibrary, "scikit-learn");
-  assert.equal(artifact.meta.visionModel.modelId, "not-available");
+  assert.equal(artifact.meta.visionModel.modelId, "Marqo/marqo-fashionSigLIP");
+  assert.equal(artifact.meta.historicalImageCoverage, 508);
+  assert.equal(artifact.meta.upcomingImageCoverage, 36);
   assert.equal(artifact.meta.model.topK, 8);
-  assert.equal(artifact.meta.model.attributeWeight, 1);
-  assert.equal(artifact.meta.model.visualWeight, 0);
+  assert.equal(artifact.meta.model.minimumVisualScore, 0.5);
+  assert.equal(artifact.meta.model.minimumMatchConfidence, "Medium");
+  assert.ok(artifact.meta.model.attributeWeight > 0);
+  assert.ok(artifact.meta.model.visualWeight > 0);
+  assert.equal(
+    artifact.meta.model.attributeWeight + artifact.meta.model.visualWeight,
+    1,
+  );
   assert.equal(artifact.meta.model.modelSelection, "Temporal holdout + ParameterGrid");
   assert.equal(Object.values(artifact.meta.matchConfidenceCounts).reduce((sum, value) => sum + value, 0), artifact.meta.upcomingItems);
   assert.equal(Object.values(artifact.meta.demandUncertaintyCounts).reduce((sum, value) => sum + value, 0), artifact.meta.upcomingItems);
@@ -30,6 +38,14 @@ test("keeps the local application and fitted model contract intact", async () =>
   assert.equal(artifact.meta.dataQuality.upcomingRowsExcludedUnseenItem, 114);
   assert.ok(artifact.historical.every(({ salesTarget }) => salesTarget > 0));
   assert.ok(artifact.upcoming.every(({ itemType }) => itemType !== "OTJT"));
+  assert.equal(
+    artifact.upcoming.filter(({ imageUrl }) => Boolean(imageUrl)).length,
+    artifact.meta.upcomingImageCoverage,
+  );
+  assert.equal(
+    artifact.historical.filter(({ imageUrl }) => Boolean(imageUrl)).length,
+    artifact.meta.historicalImageCoverage,
+  );
   assert.deepEqual(Object.keys(artifact.meta.model.attributeWeights), [
     "item", "design", "category_type", "fabric", "colour",
   ]);
@@ -41,6 +57,15 @@ test("keeps the local application and fitted model contract intact", async () =>
     && recommendation.salesLow <= recommendation.expectedSales
     && recommendation.expectedSales <= recommendation.salesHigh
     && recommendation.expectedSales % 25 === 0
+  )));
+  const imageBackedUpcoming = artifact.upcoming.filter(({ imageUrl }) => Boolean(imageUrl));
+  assert.ok(imageBackedUpcoming.every(({ recommendation }) => !recommendation.noSuitableMatch));
+  assert.ok(imageBackedUpcoming.every(({ matches }) => (
+    matches[0].visualScore >= artifact.meta.model.minimumVisualScore
+  )));
+  assert.ok(artifact.upcoming.every(({ recommendation }) => (
+    !recommendation.noSuitableMatch
+    || recommendation.expectedSales === recommendation.regressionSales
   )));
   assert.ok(artifact.upcoming.some(({ recommendation }) => (
     recommendation.matchConfidence === "Medium"
@@ -57,6 +82,10 @@ test("keeps the local application and fitted model contract intact", async () =>
   assert.match(pageSource, /Match confidence/);
   assert.match(pageSource, /Sales uncertainty/);
   assert.match(pageSource, /Top historical analogue/);
+  assert.match(pageSource, /No convincing product match found/);
+  assert.match(pageSource, /No historical product is shown/);
+  assert.match(pageSource, /No product match/);
+  assert.match(pageSource, /decision\.noSuitableMatch/);
   assert.match(pageSource, /Expected customer sales/);
   assert.match(pageSource, /Recommended initial order/);
   assert.match(pageSource, /Analogue sales forecast/);
@@ -82,6 +111,9 @@ test("keeps the local application and fitted model contract intact", async () =>
   assert.match(pageSource, /Upcoming style/);
   assert.match(pageSource, /Historical analogue/);
   assert.match(pageSource, /image score uses deep visual embeddings/i);
+  assert.match(pageSource, /const visibleUpcoming =/);
+  assert.match(pageSource, /\.filter\(\(match\) => Boolean\(historyById\.get\(match\.historicalId\)\?\.imageUrl\)\)/);
+  assert.match(pageSource, /NEXT_PUBLIC_TURTLE_API_URL/);
   assert.doesNotMatch(pageSource, /FashionCLIP|scikit-learn|PyTorch|Ridge sales|CatBoost|LightGBM|pgvector|MinTrace/);
   assert.match(pageSource, /attributeValueReaders/);
   assert.match(pageSource, /catalogAttributeOrder/);
@@ -102,6 +134,8 @@ test("keeps the local application and fitted model contract intact", async () =>
   assert.match(pageSource, /queue-commercial/);
   assert.match(stylesSource, /\.catalog-attribute-grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,/s);
   assert.match(stylesSource, /\.match-grid\.match-grid-3\s*\{[^}]*repeat\(3,\s*max\(200px,\s*calc\(\(100% - 36px\) \/ 4\)\)\)/s);
+  assert.match(stylesSource, /\.no-product-match-state\s*\{/);
+  assert.match(stylesSource, /\.no-match-pill\s*\{/);
   assert.match(stylesSource, /\.match-grid\.match-grid-5\s*\{[^}]*repeat\(5,\s*max\(200px,\s*calc\(\(100% - 36px\) \/ 4\)\)\)/s);
   assert.match(stylesSource, /\.match-grid\.match-grid-8\s*\{[^}]*repeat\(8,\s*max\(200px,\s*calc\(\(100% - 36px\) \/ 4\)\)\)/s);
   assert.match(stylesSource, /\.match-grid\.match-grid-3,\s*\.match-grid\.match-grid-5,\s*\.match-grid\.match-grid-8\s*\{[^}]*column-gap:\s*12px[^}]*overflow-x:\s*auto[^}]*padding:\s*0 12px 6px/s);

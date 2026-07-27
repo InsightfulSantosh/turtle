@@ -28,6 +28,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # typescript
 next-env.d.ts
@@ -35,8 +36,10 @@ next-env.d.ts
 /.venv/
 /backend/.pytest_cache/
 **/__pycache__/
+*.egg-info/
 /DATA/
 /outputs/
 /tmp/
 /models/
 /.model-cache/
+/.cache/
