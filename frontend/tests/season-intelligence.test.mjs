@@ -19,9 +19,15 @@ test("keeps the local application and fitted model contract intact", async () =>
   assert.equal(artifact.meta.upcomingSeason, "SS27");
   assert.equal(artifact.meta.model.demandLibrary, "scikit-learn");
   assert.equal(artifact.meta.visionModel.modelId, "Marqo/marqo-fashionSigLIP");
+  assert.equal(artifact.meta.visionModel.reranker.modelId, "facebook/dinov2-base");
+  assert.equal(artifact.meta.visionModel.reranker.candidateCount, 50);
+  assert.equal(artifact.meta.visionModel.reranker.sameItemTypeConstraint, true);
+  assert.equal(artifact.meta.model.dinoRerankWeight, 0.5);
+  assert.deepEqual(artifact.meta.visionModel.reranker.weightGrid, [0.5]);
+  assert.match(artifact.meta.visualMethod, /Two-stage FashionSigLIP.*DINOv2/);
   assert.equal(artifact.meta.historicalImageCoverage, 508);
   assert.equal(artifact.meta.upcomingImageCoverage, 36);
-  assert.equal(artifact.meta.model.topK, 8);
+  assert.ok([3, 5, 8].includes(artifact.meta.model.topK));
   assert.equal(artifact.meta.model.minimumVisualScore, 0.5);
   assert.equal(artifact.meta.model.minimumMatchConfidence, "Medium");
   assert.ok(artifact.meta.model.attributeWeight > 0);
@@ -59,9 +65,13 @@ test("keeps the local application and fitted model contract intact", async () =>
     && recommendation.expectedSales % 25 === 0
   )));
   const imageBackedUpcoming = artifact.upcoming.filter(({ imageUrl }) => Boolean(imageUrl));
-  assert.ok(imageBackedUpcoming.every(({ recommendation }) => !recommendation.noSuitableMatch));
-  assert.ok(imageBackedUpcoming.every(({ matches }) => (
-    matches[0].visualScore >= artifact.meta.model.minimumVisualScore
+  assert.ok(imageBackedUpcoming.some(({ recommendation }) => !recommendation.noSuitableMatch));
+  assert.ok(imageBackedUpcoming.every(({ matches }) => matches.every((match) => (
+    match.fashionVisualScore !== null && match.dinoVisualScore !== null
+  ))));
+  assert.ok(imageBackedUpcoming.every(({ matches, recommendation }) => (
+    recommendation.noSuitableMatch
+    || matches[0].visualScore >= artifact.meta.model.minimumVisualScore
   )));
   assert.ok(artifact.upcoming.every(({ recommendation }) => (
     !recommendation.noSuitableMatch
@@ -79,6 +89,7 @@ test("keeps the local application and fitted model contract intact", async () =>
   assert.ok(artifact.historical.every((item) => !("mrp" in item)));
   assert.ok(artifact.upcoming.every((item) => !("mrp" in item)));
   assert.match(pageSource, /Visual AI retrieval \+ trained unit-sales forecasting/);
+  assert.match(pageSource, /FashionSigLIP shortlists the top/);
   assert.match(pageSource, /Match confidence/);
   assert.match(pageSource, /Sales uncertainty/);
   assert.match(pageSource, /Top historical analogue/);

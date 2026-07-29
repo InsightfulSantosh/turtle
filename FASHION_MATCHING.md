@@ -32,6 +32,22 @@ Hugging Face or OpenCLIP fashion encoders can be evaluated in a separate
 collection. Do not activate a model merely because it wins a public benchmark;
 select it with labelled, catalogue-specific evaluation.
 
+For the real-data planner artifact, the production visual path is two-stage:
+
+```text
+FashionSigLIP retrieves the top 50 same-item-type candidates
+  -> DINOv2 evaluates fine visual detail only inside that shortlist
+  -> FashionSigLIP and DINOv2 each contribute 50% of visual similarity
+  -> structured attributes and the calibrated visual score rank the final analogue set
+```
+
+The category constraint is relaxed only when a category has fewer than two
+image-backed historical candidates. If DINOv2 is disabled, unavailable, or its
+configured weight is `0`, the planner retains the FashionSigLIP
+baseline; a partial reranker is never allowed to introduce a new candidate.
+Set `FASHION_DINO_MODEL_REVISION` to an exact Hugging Face commit before a
+production rebuild, just as for the primary encoder.
+
 ## Installation
 
 Python 3.12 is required. Install the matching extras into the existing virtual

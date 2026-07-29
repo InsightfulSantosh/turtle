@@ -14,13 +14,16 @@ class EncoderError(RuntimeError):
     """Raised when a configured embedding model cannot produce valid vectors."""
 
 
-class FashionEncoder(Protocol):
+class ImageEncoder(Protocol):
     model_id: str
     revision: str
     dimension: int
-    supports_text: bool
 
     def encode_images(self, images: Sequence[Image.Image]) -> list[list[float]]: ...
+
+
+class FashionEncoder(ImageEncoder, Protocol):
+    supports_text: bool
 
     def encode_texts(self, texts: Sequence[str]) -> list[list[float]]: ...
 
@@ -171,6 +174,61 @@ class HuggingFaceFashionEncoder:
 
 
 @dataclass
+class DINOv2VisualEncoder:
+    """Image-only DINOv2 encoder used to rerank fashion-retrieval candidates.
+
+    DINOv2 is deliberately kept separate from the FashionSigLIP encoder. It
+    captures fine visual detail without replacing the fashion model's semantic
+    candidate-retrieval role.
+    """
+
+    model_id: str = "facebook/dinov2-base"
+    requested_revision: str = "main"
+    configured_device: str = "auto"
+
+    def __post_init__(self) -> None:
+        try:
+            from transformers import AutoImageProcessor, AutoModel
+        except ImportError as exc:  # pragma: no cover - deployment dependency
+            raise EncoderError("torch and transformers are required for DINOv2 inference") from exc
+        self.device = choose_device(self.configured_device)
+        self.processor = AutoImageProcessor.from_pretrained(
+            self.model_id,
+            revision=self.requested_revision,
+            trust_remote_code=False,
+        )
+        self.model = AutoModel.from_pretrained(
+            self.model_id,
+            revision=self.requested_revision,
+            trust_remote_code=False,
+        )
+        self.model.to(self.device).eval()
+        self.revision = getattr(self.model.config, "_commit_hash", None) or self.requested_revision
+        hidden_size = getattr(self.model.config, "hidden_size", None)
+        if hidden_size is None:
+            raise EncoderError(f"{self.model_id} does not expose a visual embedding dimension")
+        self.dimension = int(hidden_size)
+
+    def encode_images(
+        self,
+        images: Sequence[Image.Image],
+    ) -> list[list[float]]:
+        if not images:
+            return []
+        import torch
+
+        inputs = self.processor(images=list(images), return_tensors="pt")
+        inputs = {
+            name: tensor.to(self.device)
+            for name, tensor in inputs.items()
+            if hasattr(tensor, "to")
+        }
+        with torch.inference_mode():
+            output = self.model(**inputs)
+        return _tensor_vectors(output, self.dimension)
+
+
+@dataclass
 class OpenClipFashionEncoder:
     model_id: str
     requested_revision: str = "main"
@@ -260,3 +318,14 @@ def create_encoder(
     if model_id.lower().startswith(("hopitai/", "marqo/")):
         return OpenClipFashionEncoder(model_id, revision, device)
     return HuggingFaceFashionEncoder(model_id, revision, device)
+
+
+def create_dino_encoder(
+    model_id: str = "facebook/dinov2-base",
+    *,
+    revision: str = "main",
+    device: str = "auto",
+) -> ImageEncoder:
+    """Create the isolated visual-detail encoder for second-stage reranking."""
+
+    return DINOv2VisualEncoder(model_id, revision, device)

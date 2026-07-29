@@ -13,6 +13,16 @@ def _as_bool(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _as_weight_grid(name: str, default: tuple[float, ...]) -> tuple[float, ...]:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    values = tuple(float(part.strip()) for part in value.split(",") if part.strip())
+    if not values:
+        raise ValueError(f"{name} must contain at least one numeric weight")
+    return values
+
+
 @dataclass(frozen=True)
 class MatchingSettings:
     model_id: str = "Marqo/marqo-fashionSigLIP"
@@ -28,6 +38,12 @@ class MatchingSettings:
     min_image_dimension: int = 32
     pad_to_square: bool = True
     crop_uniform_background: bool = False
+    dino_reranker_enabled: bool = True
+    dino_model_id: str = "facebook/dinov2-base"
+    dino_model_revision: str = "main"
+    dino_candidate_count: int = 50
+    dino_weight_grid: tuple[float, ...] = (0.5,)
+    dino_require_same_item_type: bool = True
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str | None = None
     collection_prefix: str = "turtle-fashion"
@@ -48,6 +64,10 @@ class MatchingSettings:
             raise ValueError("top_k must be positive and no larger than candidate_count")
         if self.minimum_score is not None and not 0 <= self.minimum_score <= 1:
             raise ValueError("minimum_score must be between 0 and 1")
+        if not 1 <= self.dino_candidate_count <= self.candidate_count:
+            raise ValueError("dino_candidate_count must be between 1 and candidate_count")
+        if not self.dino_weight_grid or any(not 0 <= weight <= 1 for weight in self.dino_weight_grid):
+            raise ValueError("dino_weight_grid values must be between 0 and 1")
 
     @classmethod
     def from_environment(cls) -> MatchingSettings:
@@ -77,6 +97,18 @@ class MatchingSettings:
             crop_uniform_background=_as_bool(
                 "FASHION_CROP_UNIFORM_BACKGROUND",
                 False,
+            ),
+            dino_reranker_enabled=_as_bool("FASHION_DINO_RERANK_ENABLED", True),
+            dino_model_id=os.getenv("FASHION_DINO_MODEL_ID", "facebook/dinov2-base"),
+            dino_model_revision=os.getenv("FASHION_DINO_MODEL_REVISION", "main"),
+            dino_candidate_count=int(os.getenv("FASHION_DINO_CANDIDATE_COUNT", "50")),
+            dino_weight_grid=_as_weight_grid(
+                "FASHION_DINO_WEIGHT_GRID",
+                (0.5,),
+            ),
+            dino_require_same_item_type=_as_bool(
+                "FASHION_DINO_REQUIRE_SAME_ITEM_TYPE",
+                True,
             ),
             qdrant_url=os.getenv("QDRANT_URL", "http://localhost:6333"),
             qdrant_api_key=os.getenv("QDRANT_API_KEY"),

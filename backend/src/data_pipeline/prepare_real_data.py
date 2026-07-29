@@ -9,7 +9,7 @@ from data_pipeline.pipeline import RealDataPipeline
 from data_pipeline.settings import PipelineSettings
 from fashion_matching.artifact_vision import build_artifact_vision_output
 from fashion_matching.config import MatchingSettings
-from fashion_matching.encoders import create_encoder
+from fashion_matching.encoders import create_dino_encoder, create_encoder
 from fashion_matching.preprocessing import ImagePreprocessor
 
 
@@ -42,6 +42,15 @@ def main() -> None:
             revision=revision,
             device=device,
         )
+        reranker = (
+            create_dino_encoder(
+                matching.dino_model_id,
+                revision=matching.dino_model_revision,
+                device=device,
+            )
+            if matching.dino_reranker_enabled
+            else None
+        )
         preprocessor = ImagePreprocessor(
             version=matching.preprocessing_version,
             max_bytes=matching.max_image_bytes,
@@ -57,6 +66,10 @@ def main() -> None:
                 settings=settings,
                 encoder=encoder,
                 preprocessor=preprocessor,
+                reranker=reranker,
+                candidate_count=matching.dino_candidate_count,
+                reranker_weight_grid=matching.dino_weight_grid,
+                require_same_item_type=matching.dino_require_same_item_type,
                 batch_size=batch_size,
             )
 

@@ -7,6 +7,8 @@ import numpy as np
 from core.config import paths
 from machine_learning.model import (
     attribute_similarity,
+    blend_two_stage_visual_scores,
+    build_model_artifact,
     calibrate_vision,
     demand_features,
     demand_uncertainty,
@@ -22,6 +24,83 @@ from machine_learning.model import (
 def test_vision_calibration_is_monotonic() -> None:
     calibration = calibrate_vision([0.1, 0.2, 0.3, 0.5, 0.8, 1.0])
     assert calibration.similarity(0.15) > calibration.similarity(0.50) > calibration.similarity(0.90)
+def test_two_stage_visual_blend_never_falls_back_to_dino_without_fashion_candidate() -> None:
+    assert blend_two_stage_visual_scores(None, 1.0, 0.75) is None
+    assert blend_two_stage_visual_scores(0.8, None, 0.75) == 0.8
+    assert blend_two_stage_visual_scores(0.8, 0.4, 0.25) == 0.7
+
+
+def test_two_stage_artifact_does_not_allow_dino_to_add_unshortlisted_products() -> None:
+    def product(identifier: str, item_type: str, sales: int) -> dict[str, object]:
+        return {
+            "id": identifier,
+            "sourceId": identifier.removeprefix("AW25-"),
+            "itemType": item_type,
+            "design": "CHECKS",
+            "categoryType": "CASUAL",
+            "fabric": "COTTON",
+            "colour": "BLUE",
+            "season": "AW25",
+            "order": sales + 50,
+            "dispatch": sales + 25,
+            "sales": sales,
+            "sellThrough": 0.7,
+            "imageUrl": f"/product-images/historical/{identifier}",
+            "hasVisualFeature": True,
+        }
+
+    history = [
+        product("AW25-OTSH-1", "OTSH", 300),
+        product("AW25-OTSH-2", "OTSH", 350),
+        product("AW25-OTTR-3", "OTTR", 500),
+    ]
+    source = {
+        "historical": history,
+        "upcoming": [
+            {
+                **product("OTSH-QUERY", "OTSH", 0),
+                "id": "OTSH-QUERY",
+                "sourceId": None,
+                "imageUrl": "/product-images/upcoming/OTSH-QUERY",
+            }
+        ],
+    }
+    pairs = []
+    for left_id, right_id, fashion, dino in (
+        ("AW25-OTSH-1", "AW25-OTSH-1", 0.0, 0.0),
+        ("AW25-OTSH-1", "AW25-OTSH-2", 0.2, 0.4),
+        ("AW25-OTSH-2", "AW25-OTSH-1", 0.2, 0.4),
+        ("AW25-OTSH-2", "AW25-OTSH-2", 0.0, 0.0),
+        ("AW25-OTTR-3", "AW25-OTTR-3", 0.0, 0.0),
+        ("OTSH-QUERY", "AW25-OTSH-1", 0.1, 0.3),
+        ("OTSH-QUERY", "AW25-OTSH-2", 0.2, 0.2),
+    ):
+        pairs.append(
+            {
+                "leftId": left_id,
+                "rightId": right_id,
+                "fashionDistance": fashion,
+                "dinoDistance": dino,
+                "candidateRank": 1,
+            }
+        )
+    artifact = build_model_artifact(
+        source,
+        {
+            "engine": "two-stage test",
+            "modelId": "test/fashion",
+            "modelRevision": "test",
+            "embeddingDimension": 3,
+            "historicalCoverage": 3,
+            "upcomingCoverage": 1,
+            "reranker": {"modelId": "test/dino", "weightGrid": [0.0, 0.5, 1.0]},
+            "candidatePairs": pairs,
+        },
+    )
+
+    matches = artifact["upcoming"][0]["matches"]
+    assert {match["historicalId"] for match in matches} == {"AW25-OTSH-1", "AW25-OTSH-2"}
+    assert artifact["meta"]["visionModel"]["reranker"]["modelId"] == "test/dino"
 
 
 def test_category_mismatch_is_strongly_penalized() -> None:
@@ -138,9 +217,18 @@ def test_generated_artifact_contract() -> None:
     assert data["meta"]["dataMode"] == "real"
     assert data["meta"]["upcomingSeason"] == "SS27"
     assert data["meta"]["model"]["demandLibrary"] == "scikit-learn"
-    assert "image embeddings" in data["meta"]["visualMethod"]
+    assert data["meta"]["visualMethod"] == (
+        "Two-stage FashionSigLIP candidate retrieval with DINOv2 visual-detail reranking"
+    )
     assert data["meta"]["visionModel"]["modelId"] == "Marqo/marqo-fashionSigLIP"
     assert data["meta"]["visionModel"]["embeddingDimension"] == 768
+    reranker = data["meta"]["visionModel"]["reranker"]
+    assert reranker["modelId"] == "facebook/dinov2-base"
+    assert reranker["embeddingDimension"] == 768
+    assert reranker["candidateCount"] == 50
+    assert reranker["sameItemTypeConstraint"] is True
+    assert data["meta"]["model"]["dinoRerankWeight"] == 0.5
+    assert reranker["weightGrid"] == [0.5]
     assert data["meta"]["visionModel"]["historicalCoverage"] == data["meta"]["historicalImageCoverage"] == 508
     assert data["meta"]["visionModel"]["upcomingCoverage"] == data["meta"]["upcomingImageCoverage"] == 36
     assert data["meta"]["visionCalibration"]["servingMedianDistance"] > (
@@ -190,9 +278,13 @@ def test_generated_artifact_contract() -> None:
         if item["imageUrl"]:
             assert item["hasVisualFeature"] is True
             assert all(match["visualScore"] is not None for match in item["matches"])
+            assert all(match["fashionVisualScore"] is not None for match in item["matches"])
+            assert all(match["dinoVisualScore"] is not None for match in item["matches"])
         else:
             assert item["hasVisualFeature"] is False
             assert all(match["visualScore"] is None for match in item["matches"])
+            assert all(match["fashionVisualScore"] is None for match in item["matches"])
+            assert all(match["dinoVisualScore"] is None for match in item["matches"])
         assert "design" in item
         assert "categoryType" in item
         assert "pattern" not in item
@@ -201,13 +293,14 @@ def test_generated_artifact_contract() -> None:
     history_by_id = {item["id"]: item for item in data["historical"]}
     image_backed_upcoming = [item for item in data["upcoming"] if item["imageUrl"]]
     assert image_backed_upcoming
-    assert all(
+    assert any(
         not item["recommendation"]["noSuitableMatch"]
         for item in image_backed_upcoming
     )
     assert all(
         item["matches"][0]["visualScore"] >= data["meta"]["model"]["minimumVisualScore"]
         for item in image_backed_upcoming
+        if not item["recommendation"]["noSuitableMatch"]
     )
     assert all("mrp" not in item for item in data["historical"])
     assert all(

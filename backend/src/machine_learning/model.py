@@ -445,6 +445,16 @@ def analogue_prediction(
     attribute_weight: float,
     top_k: int,
 ) -> tuple[float, list[tuple[int, float]]]:
+    visual_candidates = [
+        index
+        for index in candidate_indices
+        if not np.isnan(visual_matrix[target_index, index])
+    ]
+    # In a two-stage index, only FashionSigLIP-shortlisted candidates may be
+    # considered by the analogue model. If a query has no image candidate,
+    # retain the existing attribute-only fallback.
+    if visual_candidates:
+        candidate_indices = visual_candidates
     ranked: list[tuple[int, float]] = []
     for index in candidate_indices:
         visual = None if np.isnan(visual_matrix[target_index, index]) else float(visual_matrix[target_index, index])
@@ -748,8 +758,8 @@ def recommend_one(
 ) -> dict[str, Any]:
     top_k = int(model["topK"])
     selected = matches[:top_k]
-    weights = np.asarray([max(float(match["hybridScore"]), 0.01) ** 2 for match in selected])
     history_index = {historical["id"]: index for index, historical in enumerate(history)}
+    weights = np.asarray([max(float(match["hybridScore"]), 0.01) ** 2 for match in selected])
     selected_targets = np.asarray([targets[history_index[match["historicalId"]]] for match in selected])
     analogue_sales = float(np.average(selected_targets, weights=weights))
     regression_sales = float(demand_pipeline.predict([demand_features(item)])[0])
@@ -802,45 +812,170 @@ def recommend_one(
     }
 
 
+def blend_two_stage_visual_scores(
+    fashion_score: float | None,
+    dino_score: float | None,
+    dino_weight: float,
+) -> float | None:
+    """Blend calibrated stage scores only when both visual stages are present."""
+
+    if fashion_score is None:
+        return None
+    if dino_score is None:
+        return fashion_score
+    return round(fashion_score * (1 - dino_weight) + dino_score * dino_weight, 4)
+
+
+def _candidate_calibration_values(
+    rows: list[dict[str, Any]],
+    *,
+    left_ids: set[str],
+    right_ids: set[str],
+    distance_key: str,
+    exclude_self: bool = False,
+) -> list[float]:
+    return [
+        float(row[distance_key])
+        for row in rows
+        if str(row["leftId"]) in left_ids
+        and str(row["rightId"]) in right_ids
+        and (not exclude_self or row["leftId"] != row["rightId"])
+    ]
+
+
+def _two_stage_visual_matrix(
+    history: list[dict[str, Any]],
+    candidate_rows: list[dict[str, Any]],
+    fashion_calibration: VisionCalibration,
+    dino_calibration: VisionCalibration,
+    dino_weight: float,
+) -> np.ndarray:
+    index_by_id = {str(item["id"]): index for index, item in enumerate(history)}
+    matrix = np.full((len(history), len(history)), np.nan, dtype=np.float64)
+    for row in candidate_rows:
+        left_index = index_by_id.get(str(row["leftId"]))
+        right_index = index_by_id.get(str(row["rightId"]))
+        if left_index is None or right_index is None:
+            continue
+        score = blend_two_stage_visual_scores(
+            fashion_calibration.similarity(float(row["fashionDistance"])),
+            dino_calibration.similarity(float(row["dinoDistance"])),
+            dino_weight,
+        )
+        if score is not None:
+            matrix[left_index, right_index] = score
+    return matrix
+
+
 def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) -> dict[str, Any]:
     history = [dict(item) for item in source["historical"]]
     upcoming = [dict(item) for item in source["upcoming"]]
     active_attribute_weights = informative_attribute_weights(history, upcoming)
     rows = vision_output.get("distances", [])
-    distance_map = {(str(row["leftId"]), str(row["rightId"])): float(row["distance"]) for row in rows}
+    candidate_rows = list(vision_output.get("candidatePairs", []))
     historical_ids = {str(item["id"]) for item in history}
     upcoming_ids = {str(item["id"]) for item in upcoming}
-    historical_calibration_values = [
-        float(row["distance"])
-        for row in rows
-        if str(row["leftId"]) in historical_ids
-        and str(row["rightId"]) in historical_ids
-        and row["leftId"] != row["rightId"]
-    ]
-    serving_calibration_values = [
-        float(row["distance"])
-        for row in rows
-        if str(row["leftId"]) in upcoming_ids and str(row["rightId"]) in historical_ids
-    ]
-    historical_calibration = calibrate_vision(historical_calibration_values)
-    serving_calibration = calibrate_vision(
-        serving_calibration_values or historical_calibration_values,
-    )
-
     count = len(history)
     attribute_matrix = np.eye(count, dtype=np.float64)
-    visual_matrix = np.full((count, count), np.nan, dtype=np.float64)
     for left_index, left in enumerate(history):
         for right_index, right in enumerate(history):
             attribute, _ = attribute_similarity(left, right, active_attribute_weights)
             attribute_matrix[left_index, right_index] = attribute
-            distance = distance_map.get((left["id"], right["id"]))
-            visual = historical_calibration.similarity(distance)
-            if visual is not None:
-                visual_matrix[left_index, right_index] = visual
 
     targets = np.asarray([sales_target(item) for item in history], dtype=np.float64)
-    fitted = backtest_model(history, attribute_matrix, visual_matrix, targets)
+    candidate_history_ids: dict[str, set[str]] = {}
+    candidate_pair_map: dict[tuple[str, str], dict[str, Any]] = {}
+    distance_map: dict[tuple[str, str], float] = {}
+    dino_historical_calibration: VisionCalibration | None = None
+    dino_serving_calibration: VisionCalibration | None = None
+    selected_dino_weight = 0.0
+    if candidate_rows:
+        fashion_historical_values = _candidate_calibration_values(
+            candidate_rows,
+            left_ids=historical_ids,
+            right_ids=historical_ids,
+            distance_key="fashionDistance",
+            exclude_self=True,
+        )
+        fashion_serving_values = _candidate_calibration_values(
+            candidate_rows,
+            left_ids=upcoming_ids,
+            right_ids=historical_ids,
+            distance_key="fashionDistance",
+        )
+        dino_historical_values = _candidate_calibration_values(
+            candidate_rows,
+            left_ids=historical_ids,
+            right_ids=historical_ids,
+            distance_key="dinoDistance",
+            exclude_self=True,
+        )
+        dino_serving_values = _candidate_calibration_values(
+            candidate_rows,
+            left_ids=upcoming_ids,
+            right_ids=historical_ids,
+            distance_key="dinoDistance",
+        )
+        historical_calibration = calibrate_vision(fashion_historical_values)
+        serving_calibration = calibrate_vision(fashion_serving_values or fashion_historical_values)
+        dino_historical_calibration = calibrate_vision(dino_historical_values)
+        dino_serving_calibration = calibrate_vision(dino_serving_values or dino_historical_values)
+        weight_grid = tuple(
+            float(weight)
+            for weight in vision_output.get("reranker", {}).get(
+                "weightGrid",
+                (0.0, 0.25, 0.5, 0.75, 1.0),
+            )
+        )
+        fitted_candidates: list[tuple[float, dict[str, Any]]] = []
+        for dino_weight in weight_grid:
+            visual_matrix = _two_stage_visual_matrix(
+                history,
+                candidate_rows,
+                historical_calibration,
+                dino_historical_calibration,
+                dino_weight,
+            )
+            fitted_candidates.append(
+                (dino_weight, backtest_model(history, attribute_matrix, visual_matrix, targets)))
+        selected_dino_weight, fitted = min(
+            fitted_candidates,
+            key=lambda candidate: (float(candidate[1]["score"]), candidate[0]),
+        )
+        for row in candidate_rows:
+            if str(row["leftId"]) in upcoming_ids and str(row["rightId"]) in historical_ids:
+                left_id = str(row["leftId"])
+                right_id = str(row["rightId"])
+                candidate_history_ids.setdefault(left_id, set()).add(right_id)
+                candidate_pair_map[(left_id, right_id)] = row
+    else:
+        distance_map = {
+            (str(row["leftId"]), str(row["rightId"])): float(row["distance"])
+            for row in rows
+        }
+        historical_calibration_values = [
+            float(row["distance"])
+            for row in rows
+            if str(row["leftId"]) in historical_ids
+            and str(row["rightId"]) in historical_ids
+            and row["leftId"] != row["rightId"]
+        ]
+        serving_calibration_values = [
+            float(row["distance"])
+            for row in rows
+            if str(row["leftId"]) in upcoming_ids and str(row["rightId"]) in historical_ids
+        ]
+        historical_calibration = calibrate_vision(historical_calibration_values)
+        serving_calibration = calibrate_vision(
+            serving_calibration_values or historical_calibration_values,
+        )
+        visual_matrix = np.full((count, count), np.nan, dtype=np.float64)
+        for left_index, left in enumerate(history):
+            for right_index, right in enumerate(history):
+                visual = historical_calibration.similarity(distance_map.get((left["id"], right["id"])))
+                if visual is not None:
+                    visual_matrix[left_index, right_index] = visual
+        fitted = backtest_model(history, attribute_matrix, visual_matrix, targets)
     for item, target in zip(history, targets, strict=True):
         # Retain enough precision for API-side reproduction after loading the
         # artifact. Sales and final order recommendations are pack-rounded later.
@@ -859,10 +994,37 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
     retrieval_history = [historical for historical in history if historical.get("imageUrl")] or history
     for item in upcoming:
         matches: list[dict[str, Any]] = []
-        for historical in retrieval_history:
+        shortlist_ids = candidate_history_ids.get(str(item["id"]))
+        eligible_history = (
+            [historical for historical in retrieval_history if str(historical["id"]) in shortlist_ids]
+            if shortlist_ids
+            else retrieval_history
+        )
+        for historical in eligible_history:
             attribute, breakdown = attribute_similarity(item, historical, active_attribute_weights)
             all_attribute_scores.append(attribute)
-            visual = serving_calibration.similarity(distance_map.get((item["id"], historical["id"])))
+            fashion_visual: float | None = None
+            dino_visual: float | None = None
+            if candidate_rows:
+                candidate = candidate_pair_map.get((str(item["id"]), str(historical["id"])))
+                if candidate is not None:
+                    fashion_visual = serving_calibration.similarity(
+                        float(candidate["fashionDistance"]),
+                    )
+                    assert dino_serving_calibration is not None
+                    dino_visual = dino_serving_calibration.similarity(
+                        float(candidate["dinoDistance"]),
+                    )
+                visual = blend_two_stage_visual_scores(
+                    fashion_visual,
+                    dino_visual,
+                    selected_dino_weight,
+                )
+            else:
+                fashion_visual = serving_calibration.similarity(
+                    distance_map.get((item["id"], historical["id"])),
+                )
+                visual = fashion_visual
             if visual is not None:
                 all_visual_scores.append(visual)
             hybrid = combined_similarity(attribute, visual, attribute_weight)
@@ -871,6 +1033,8 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
                     "historicalId": historical["id"],
                     "attributeScore": round(attribute, 4),
                     "visualScore": visual,
+                    "fashionVisualScore": fashion_visual,
+                    "dinoVisualScore": dino_visual,
                     "hybridScore": round(hybrid, 4),
                     "attributeBreakdown": breakdown,
                 }
@@ -936,6 +1100,7 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
                 "device": vision_output.get("device", "unknown"),
                 "historicalCoverage": vision_output.get("historicalCoverage", 0),
                 "upcomingCoverage": vision_output.get("upcomingCoverage", 0),
+                "reranker": vision_output.get("reranker"),
             },
             "model": {
                 "version": MODEL_VERSION,
@@ -946,6 +1111,11 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
                 "algorithm": (
                     "Attribute retrieval + scikit-learn Ridge sales forecast + inventory policy"
                     if not all_visual_scores
+                    else (
+                        "Two-stage FashionSigLIP retrieval + DINOv2 visual reranking + "
+                        "attribute constraints + scikit-learn Ridge sales forecast + inventory policy"
+                    )
+                    if candidate_rows
                     else "Calibrated FashionCLIP retrieval + scikit-learn Ridge sales forecast + inventory policy"
                 ),
                 "demandLibrary": "scikit-learn",
@@ -957,6 +1127,7 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
                 "attributeWeightGrid": fitted["attributeWeightGrid"],
                 "attributeWeight": round(attribute_weight, 2),
                 "visualWeight": round(1 - attribute_weight, 2),
+                "dinoRerankWeight": round(selected_dino_weight, 2),
                 "minimumVisualScore": MIN_CONVINCING_VISUAL_SCORE,
                 "minimumMatchConfidence": "Medium",
                 "noMatchPolicy": (
@@ -984,6 +1155,16 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
                 "servingMedianDistance": round(serving_calibration.median, 4),
                 "servingQ10Distance": round(serving_calibration.q10, 4),
                 "servingQ90Distance": round(serving_calibration.q90, 4),
+                "dinoHistoricalMedianDistance": (
+                    round(dino_historical_calibration.median, 4)
+                    if dino_historical_calibration is not None
+                    else None
+                ),
+                "dinoServingMedianDistance": (
+                    round(dino_serving_calibration.median, 4)
+                    if dino_serving_calibration is not None
+                    else None
+                ),
                 "method": vision_output.get(
                     "calibrationMethod",
                     "Robust logistic calibration of neural embedding distance",

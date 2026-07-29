@@ -128,6 +128,15 @@ type Dataset = {
       device: string;
       historicalCoverage: number;
       upcomingCoverage: number;
+      reranker?: {
+        modelId: string;
+        modelRevision: string | null;
+        embeddingDimension: number;
+        device: string;
+        candidateCount: number;
+        weightGrid: number[];
+        sameItemTypeConstraint: boolean;
+      } | null;
     };
     model: {
       version: string;
@@ -143,6 +152,7 @@ type Dataset = {
       attributeWeightGrid: number[];
       attributeWeight: number;
       visualWeight: number;
+      dinoRerankWeight?: number;
       minimumVisualScore: number;
       minimumMatchConfidence: Confidence;
       noMatchPolicy: string;
@@ -1225,7 +1235,9 @@ function App() {
           <div className="workflow-grid">
             {[
               ["01", "Audit inputs", "Map both workbook schemas, remove constant or non-comparable fields, link images, and quarantine inconsistent outcome values."],
-              ["02", "Encode products", `Create ${dataset.meta.attributeAudit.activeCount}-field structured evidence; image embeddings remain disabled until SS27 identifiers are mapped.`],
+              ["02", "Retrieve visual analogues", dataset.meta.visionModel.reranker
+                ? `FashionSigLIP shortlists the top ${dataset.meta.visionModel.reranker.candidateCount} same-item candidates; DINOv2 reranks visual detail before structured evidence is combined.`
+                : `Create ${dataset.meta.attributeAudit.activeCount}-field structured evidence and compare mapped product images.`],
               ["03", "Learn retrieval", "Use a forward season holdout and parameter search to tune neighbour count, forecast blend, and regularization."],
               ["04", "Forecast unit sales", "Ensemble similarity-weighted historical sales with a trained, regularized machine-learning forecast."],
               ["05", "Convert forecast to a buy", "Keep expected sales independent, apply the sell-through inventory policy, then enforce pack and quantity limits."],
