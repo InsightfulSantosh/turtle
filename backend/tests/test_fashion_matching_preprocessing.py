@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from fashion_matching.appearance import cosine_distance, extract_appearance_features
 from fashion_matching.manifests import ManifestError, read_manifest
 from fashion_matching.models import ManifestRecord
 from fashion_matching.preprocessing import (
@@ -63,6 +64,25 @@ def test_preprocessing_rejects_oversized_file(tmp_path: Path) -> None:
     Image.new("RGB", (40, 40), "red").save(path)
     with pytest.raises(ImageValidationError, match="byte limit"):
         ImagePreprocessor(max_bytes=10).prepare(_record(path))
+
+
+def test_appearance_features_mask_uniform_background_and_preserve_garment_colour() -> None:
+    red = Image.new("RGB", (120, 160), "white")
+    blue = Image.new("RGB", (120, 160), "white")
+    for top in range(30, 130):
+        for left in range(25, 95):
+            red.putpixel((left, top), (210, 35, 35))
+            blue.putpixel((left, top), (35, 60, 210))
+
+    red_features = extract_appearance_features(red)
+    blue_features = extract_appearance_features(blue)
+
+    assert red_features.masked
+    assert red_features.segmentation_method == "adaptive-lab-border-foreground-mask"
+    assert 0.30 < red_features.mask_coverage < 0.45
+    assert red_features.image.getpixel((0, 0)) == (245, 245, 245)
+    assert cosine_distance(red_features.colour_vector, blue_features.colour_vector) > 0.5
+    assert len(red_features.texture_vector) == 16
 
 
 def test_manifest_requires_unique_image_ids_and_does_not_use_id_as_text(

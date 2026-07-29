@@ -24,6 +24,13 @@ test("keeps the local application and fitted model contract intact", async () =>
   assert.equal(artifact.meta.visionModel.reranker.sameItemTypeConstraint, true);
   assert.equal(artifact.meta.model.dinoRerankWeight, 0.5);
   assert.deepEqual(artifact.meta.visionModel.reranker.weightGrid, [0.5]);
+  assert.equal(artifact.meta.visionModel.reranker.candidateIndex.metric, "inner-product on L2-normalized FashionSigLIP embeddings");
+  assert.equal(artifact.meta.visionModel.reranker.appearance.segmentation.method, "adaptive-lab-border-foreground-mask");
+  assert.deepEqual(artifact.meta.visionModel.reranker.appearance.weights, {
+    neural: 0.7,
+    colour: 0.2,
+    texture: 0.1,
+  });
   assert.match(artifact.meta.visualMethod, /Two-stage FashionSigLIP.*DINOv2/);
   assert.equal(artifact.meta.historicalImageCoverage, 508);
   assert.equal(artifact.meta.upcomingImageCoverage, 36);
@@ -67,7 +74,10 @@ test("keeps the local application and fitted model contract intact", async () =>
   const imageBackedUpcoming = artifact.upcoming.filter(({ imageUrl }) => Boolean(imageUrl));
   assert.ok(imageBackedUpcoming.some(({ recommendation }) => !recommendation.noSuitableMatch));
   assert.ok(imageBackedUpcoming.every(({ matches }) => matches.every((match) => (
-    match.fashionVisualScore !== null && match.dinoVisualScore !== null
+    match.fashionVisualScore !== null
+    && match.dinoVisualScore !== null
+    && match.colourVisualScore !== null
+    && match.textureVisualScore !== null
   ))));
   assert.ok(imageBackedUpcoming.every(({ matches, recommendation }) => (
     recommendation.noSuitableMatch
@@ -89,7 +99,8 @@ test("keeps the local application and fitted model contract intact", async () =>
   assert.ok(artifact.historical.every((item) => !("mrp" in item)));
   assert.ok(artifact.upcoming.every((item) => !("mrp" in item)));
   assert.match(pageSource, /Visual AI retrieval \+ trained unit-sales forecasting/);
-  assert.match(pageSource, /FashionSigLIP shortlists the top/);
+  assert.match(pageSource, /FashionSigLIP retrieves the top/);
+  assert.match(pageSource, /garment-masked CIELAB colour/);
   assert.match(pageSource, /Match confidence/);
   assert.match(pageSource, /Sales uncertainty/);
   assert.match(pageSource, /Top historical analogue/);
@@ -121,7 +132,7 @@ test("keeps the local application and fitted model contract intact", async () =>
   assert.match(pageSource, /Attribute-by-attribute comparison/);
   assert.match(pageSource, /Upcoming style/);
   assert.match(pageSource, /Historical analogue/);
-  assert.match(pageSource, /image score uses deep visual embeddings/i);
+  assert.match(pageSource, /image score combines FashionSigLIP, DINOv2, masked garment colour and texture evidence/i);
   assert.match(pageSource, /const visibleUpcoming =/);
   assert.match(pageSource, /\.filter\(\(match\) => Boolean\(historyById\.get\(match\.historicalId\)\?\.imageUrl\)\)/);
   assert.match(pageSource, /NEXT_PUBLIC_TURTLE_API_URL/);

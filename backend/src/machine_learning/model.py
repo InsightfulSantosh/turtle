@@ -445,11 +445,7 @@ def analogue_prediction(
     attribute_weight: float,
     top_k: int,
 ) -> tuple[float, list[tuple[int, float]]]:
-    visual_candidates = [
-        index
-        for index in candidate_indices
-        if not np.isnan(visual_matrix[target_index, index])
-    ]
+    visual_candidates = [index for index in candidate_indices if not np.isnan(visual_matrix[target_index, index])]
     # In a two-stage index, only FashionSigLIP-shortlisted candidates may be
     # considered by the analogue model. If a query has no image candidate,
     # retain the existing attribute-only fallback.
@@ -826,6 +822,33 @@ def blend_two_stage_visual_scores(
     return round(fashion_score * (1 - dino_weight) + dino_score * dino_weight, 4)
 
 
+def blend_hybrid_visual_scores(
+    fashion_score: float | None,
+    dino_score: float | None,
+    colour_score: float | None,
+    texture_score: float | None,
+    dino_weight: float,
+    component_weights: dict[str, float],
+) -> float | None:
+    """Combine neural, colour and texture evidence without penalising missing signals."""
+
+    neural_score = blend_two_stage_visual_scores(
+        fashion_score,
+        dino_score,
+        dino_weight,
+    )
+    components = (
+        (neural_score, component_weights["neural"]),
+        (colour_score, component_weights["colour"]),
+        (texture_score, component_weights["texture"]),
+    )
+    available = [(score, weight) for score, weight in components if score is not None and weight > 0]
+    if not available:
+        return None
+    total_weight = sum(weight for _, weight in available)
+    return round(sum(score * weight for score, weight in available) / total_weight, 4)
+
+
 def _candidate_calibration_values(
     rows: list[dict[str, Any]],
     *,
@@ -839,6 +862,7 @@ def _candidate_calibration_values(
         for row in rows
         if str(row["leftId"]) in left_ids
         and str(row["rightId"]) in right_ids
+        and row.get(distance_key) is not None
         and (not exclude_self or row["leftId"] != row["rightId"])
     ]
 
@@ -848,7 +872,10 @@ def _two_stage_visual_matrix(
     candidate_rows: list[dict[str, Any]],
     fashion_calibration: VisionCalibration,
     dino_calibration: VisionCalibration,
+    colour_calibration: VisionCalibration,
+    texture_calibration: VisionCalibration,
     dino_weight: float,
+    component_weights: dict[str, float],
 ) -> np.ndarray:
     index_by_id = {str(item["id"]): index for index, item in enumerate(history)}
     matrix = np.full((len(history), len(history)), np.nan, dtype=np.float64)
@@ -857,10 +884,21 @@ def _two_stage_visual_matrix(
         right_index = index_by_id.get(str(row["rightId"]))
         if left_index is None or right_index is None:
             continue
-        score = blend_two_stage_visual_scores(
+        score = blend_hybrid_visual_scores(
             fashion_calibration.similarity(float(row["fashionDistance"])),
             dino_calibration.similarity(float(row["dinoDistance"])),
+            colour_calibration.similarity(
+                float(row["colourDistance"]),
+            )
+            if row.get("colourDistance") is not None
+            else None,
+            texture_calibration.similarity(
+                float(row["textureDistance"]),
+            )
+            if row.get("textureDistance") is not None
+            else None,
             dino_weight,
+            component_weights,
         )
         if score is not None:
             matrix[left_index, right_index] = score
@@ -888,6 +926,10 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
     distance_map: dict[tuple[str, str], float] = {}
     dino_historical_calibration: VisionCalibration | None = None
     dino_serving_calibration: VisionCalibration | None = None
+    colour_historical_calibration: VisionCalibration | None = None
+    colour_serving_calibration: VisionCalibration | None = None
+    texture_historical_calibration: VisionCalibration | None = None
+    texture_serving_calibration: VisionCalibration | None = None
     selected_dino_weight = 0.0
     if candidate_rows:
         fashion_historical_values = _candidate_calibration_values(
@@ -916,10 +958,54 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
             right_ids=historical_ids,
             distance_key="dinoDistance",
         )
+        colour_historical_values = _candidate_calibration_values(
+            candidate_rows,
+            left_ids=historical_ids,
+            right_ids=historical_ids,
+            distance_key="colourDistance",
+            exclude_self=True,
+        )
+        colour_serving_values = _candidate_calibration_values(
+            candidate_rows,
+            left_ids=upcoming_ids,
+            right_ids=historical_ids,
+            distance_key="colourDistance",
+        )
+        texture_historical_values = _candidate_calibration_values(
+            candidate_rows,
+            left_ids=historical_ids,
+            right_ids=historical_ids,
+            distance_key="textureDistance",
+            exclude_self=True,
+        )
+        texture_serving_values = _candidate_calibration_values(
+            candidate_rows,
+            left_ids=upcoming_ids,
+            right_ids=historical_ids,
+            distance_key="textureDistance",
+        )
         historical_calibration = calibrate_vision(fashion_historical_values)
         serving_calibration = calibrate_vision(fashion_serving_values or fashion_historical_values)
         dino_historical_calibration = calibrate_vision(dino_historical_values)
         dino_serving_calibration = calibrate_vision(dino_serving_values or dino_historical_values)
+        colour_historical_calibration = calibrate_vision(colour_historical_values)
+        colour_serving_calibration = calibrate_vision(colour_serving_values or colour_historical_values)
+        texture_historical_calibration = calibrate_vision(texture_historical_values)
+        texture_serving_calibration = calibrate_vision(texture_serving_values or texture_historical_values)
+        component_weights = {
+            "neural": 0.70,
+            "colour": 0.20,
+            "texture": 0.10,
+            **vision_output.get("reranker", {}).get("appearance", {}).get("weights", {}),
+        }
+        if set(component_weights) != {"neural", "colour", "texture"}:
+            raise ValueError("reranker appearance weights must contain neural, colour and texture")
+        if any(weight < 0 for weight in component_weights.values()) or not math.isclose(
+            sum(component_weights.values()),
+            1.0,
+            abs_tol=1e-6,
+        ):
+            raise ValueError("reranker appearance weights must be non-negative and sum to 1")
         weight_grid = tuple(
             float(weight)
             for weight in vision_output.get("reranker", {}).get(
@@ -934,10 +1020,12 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
                 candidate_rows,
                 historical_calibration,
                 dino_historical_calibration,
+                colour_historical_calibration,
+                texture_historical_calibration,
                 dino_weight,
+                component_weights,
             )
-            fitted_candidates.append(
-                (dino_weight, backtest_model(history, attribute_matrix, visual_matrix, targets)))
+            fitted_candidates.append((dino_weight, backtest_model(history, attribute_matrix, visual_matrix, targets)))
         selected_dino_weight, fitted = min(
             fitted_candidates,
             key=lambda candidate: (float(candidate[1]["score"]), candidate[0]),
@@ -949,10 +1037,7 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
                 candidate_history_ids.setdefault(left_id, set()).add(right_id)
                 candidate_pair_map[(left_id, right_id)] = row
     else:
-        distance_map = {
-            (str(row["leftId"]), str(row["rightId"])): float(row["distance"])
-            for row in rows
-        }
+        distance_map = {(str(row["leftId"]), str(row["rightId"])): float(row["distance"]) for row in rows}
         historical_calibration_values = [
             float(row["distance"])
             for row in rows
@@ -1005,6 +1090,8 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
             all_attribute_scores.append(attribute)
             fashion_visual: float | None = None
             dino_visual: float | None = None
+            colour_visual: float | None = None
+            texture_visual: float | None = None
             if candidate_rows:
                 candidate = candidate_pair_map.get((str(item["id"]), str(historical["id"])))
                 if candidate is not None:
@@ -1015,10 +1102,23 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
                     dino_visual = dino_serving_calibration.similarity(
                         float(candidate["dinoDistance"]),
                     )
-                visual = blend_two_stage_visual_scores(
+                    if candidate.get("colourDistance") is not None:
+                        assert colour_serving_calibration is not None
+                        colour_visual = colour_serving_calibration.similarity(
+                            float(candidate["colourDistance"]),
+                        )
+                    if candidate.get("textureDistance") is not None:
+                        assert texture_serving_calibration is not None
+                        texture_visual = texture_serving_calibration.similarity(
+                            float(candidate["textureDistance"]),
+                        )
+                visual = blend_hybrid_visual_scores(
                     fashion_visual,
                     dino_visual,
+                    colour_visual,
+                    texture_visual,
                     selected_dino_weight,
+                    component_weights,
                 )
             else:
                 fashion_visual = serving_calibration.similarity(
@@ -1035,6 +1135,8 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
                     "visualScore": visual,
                     "fashionVisualScore": fashion_visual,
                     "dinoVisualScore": dino_visual,
+                    "colourVisualScore": colour_visual,
+                    "textureVisualScore": texture_visual,
                     "hybridScore": round(hybrid, 4),
                     "attributeBreakdown": breakdown,
                 }
@@ -1112,8 +1214,9 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
                     "Attribute retrieval + scikit-learn Ridge sales forecast + inventory policy"
                     if not all_visual_scores
                     else (
-                        "Two-stage FashionSigLIP retrieval + DINOv2 visual reranking + "
-                        "attribute constraints + scikit-learn Ridge sales forecast + inventory policy"
+                        "Two-stage FashionSigLIP retrieval + DINOv2, masked CIELAB colour and texture "
+                        "visual reranking + attribute constraints + scikit-learn Ridge sales forecast + "
+                        "inventory policy"
                     )
                     if candidate_rows
                     else "Calibrated FashionCLIP retrieval + scikit-learn Ridge sales forecast + inventory policy"
@@ -1156,14 +1259,26 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
                 "servingQ10Distance": round(serving_calibration.q10, 4),
                 "servingQ90Distance": round(serving_calibration.q90, 4),
                 "dinoHistoricalMedianDistance": (
-                    round(dino_historical_calibration.median, 4)
-                    if dino_historical_calibration is not None
-                    else None
+                    round(dino_historical_calibration.median, 4) if dino_historical_calibration is not None else None
                 ),
                 "dinoServingMedianDistance": (
-                    round(dino_serving_calibration.median, 4)
-                    if dino_serving_calibration is not None
+                    round(dino_serving_calibration.median, 4) if dino_serving_calibration is not None else None
+                ),
+                "colourHistoricalMedianDistance": (
+                    round(colour_historical_calibration.median, 4)
+                    if colour_historical_calibration is not None
                     else None
+                ),
+                "colourServingMedianDistance": (
+                    round(colour_serving_calibration.median, 4) if colour_serving_calibration is not None else None
+                ),
+                "textureHistoricalMedianDistance": (
+                    round(texture_historical_calibration.median, 4)
+                    if texture_historical_calibration is not None
+                    else None
+                ),
+                "textureServingMedianDistance": (
+                    round(texture_serving_calibration.median, 4) if texture_serving_calibration is not None else None
                 ),
                 "method": vision_output.get(
                     "calibrationMethod",

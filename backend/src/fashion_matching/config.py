@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 
@@ -44,6 +45,10 @@ class MatchingSettings:
     dino_candidate_count: int = 50
     dino_weight_grid: tuple[float, ...] = (0.5,)
     dino_require_same_item_type: bool = True
+    appearance_mask_enabled: bool = True
+    appearance_neural_weight: float = 0.70
+    appearance_colour_weight: float = 0.20
+    appearance_texture_weight: float = 0.10
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str | None = None
     collection_prefix: str = "turtle-fashion"
@@ -68,6 +73,18 @@ class MatchingSettings:
             raise ValueError("dino_candidate_count must be between 1 and candidate_count")
         if not self.dino_weight_grid or any(not 0 <= weight <= 1 for weight in self.dino_weight_grid):
             raise ValueError("dino_weight_grid values must be between 0 and 1")
+        appearance_weight_total = (
+            self.appearance_neural_weight + self.appearance_colour_weight + self.appearance_texture_weight
+        )
+        if any(
+            weight < 0
+            for weight in (
+                self.appearance_neural_weight,
+                self.appearance_colour_weight,
+                self.appearance_texture_weight,
+            )
+        ) or not math.isclose(appearance_weight_total, 1.0, abs_tol=1e-6):
+            raise ValueError("appearance reranker weights must be non-negative and sum to 1")
 
     @classmethod
     def from_environment(cls) -> MatchingSettings:
@@ -110,6 +127,10 @@ class MatchingSettings:
                 "FASHION_DINO_REQUIRE_SAME_ITEM_TYPE",
                 True,
             ),
+            appearance_mask_enabled=_as_bool("FASHION_APPEARANCE_MASK_ENABLED", True),
+            appearance_neural_weight=float(os.getenv("FASHION_APPEARANCE_NEURAL_WEIGHT", "0.70")),
+            appearance_colour_weight=float(os.getenv("FASHION_APPEARANCE_COLOUR_WEIGHT", "0.20")),
+            appearance_texture_weight=float(os.getenv("FASHION_APPEARANCE_TEXTURE_WEIGHT", "0.10")),
             qdrant_url=os.getenv("QDRANT_URL", "http://localhost:6333"),
             qdrant_api_key=os.getenv("QDRANT_API_KEY"),
             collection_prefix=os.getenv(

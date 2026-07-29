@@ -166,13 +166,17 @@ def test_two_stage_visual_artifact_reranks_only_same_item_type_candidates(
     )
 
     assert output["reranker"]["modelId"] == "local/test-dino-reranker"
-    upcoming_candidates = [
-        row
-        for row in output["candidatePairs"]
-        if row["leftId"] == "OTSH-200-1001"
-    ]
+    assert output["reranker"]["candidateIndex"]["metric"].startswith("inner-product")
+    assert output["reranker"]["appearance"]["colourDescriptor"]["space"] == "CIELAB"
+    assert output["reranker"]["appearance"]["weights"] == {
+        "neural": 0.7,
+        "colour": 0.2,
+        "texture": 0.1,
+    }
+    upcoming_candidates = [row for row in output["candidatePairs"] if row["leftId"] == "OTSH-200-1001"]
     assert [row["candidateRank"] for row in upcoming_candidates] == [1, 2]
     assert {row["rightId"] for row in upcoming_candidates} == {
         "AW25-OTSH-100-1001",
         "AW25-OTSH-101-1001",
     }
+    assert all("colourDistance" in row and "textureDistance" in row for row in upcoming_candidates)

@@ -7,6 +7,7 @@ import numpy as np
 from core.config import paths
 from machine_learning.model import (
     attribute_similarity,
+    blend_hybrid_visual_scores,
     blend_two_stage_visual_scores,
     build_model_artifact,
     calibrate_vision,
@@ -24,10 +25,24 @@ from machine_learning.model import (
 def test_vision_calibration_is_monotonic() -> None:
     calibration = calibrate_vision([0.1, 0.2, 0.3, 0.5, 0.8, 1.0])
     assert calibration.similarity(0.15) > calibration.similarity(0.50) > calibration.similarity(0.90)
+
+
 def test_two_stage_visual_blend_never_falls_back_to_dino_without_fashion_candidate() -> None:
     assert blend_two_stage_visual_scores(None, 1.0, 0.75) is None
     assert blend_two_stage_visual_scores(0.8, None, 0.75) == 0.8
     assert blend_two_stage_visual_scores(0.8, 0.4, 0.25) == 0.7
+
+
+def test_hybrid_visual_blend_renormalizes_when_an_appearance_signal_is_missing() -> None:
+    score = blend_hybrid_visual_scores(
+        0.8,
+        0.6,
+        0.5,
+        None,
+        0.5,
+        {"neural": 0.7, "colour": 0.2, "texture": 0.1},
+    )
+    assert score == 0.6556
 
 
 def test_two_stage_artifact_does_not_allow_dino_to_add_unshortlisted_products() -> None:
@@ -218,7 +233,8 @@ def test_generated_artifact_contract() -> None:
     assert data["meta"]["upcomingSeason"] == "SS27"
     assert data["meta"]["model"]["demandLibrary"] == "scikit-learn"
     assert data["meta"]["visualMethod"] == (
-        "Two-stage FashionSigLIP candidate retrieval with DINOv2 visual-detail reranking"
+        "Two-stage FashionSigLIP candidate retrieval with DINOv2, masked CIELAB colour "
+        "and texture visual-detail reranking"
     )
     assert data["meta"]["visionModel"]["modelId"] == "Marqo/marqo-fashionSigLIP"
     assert data["meta"]["visionModel"]["embeddingDimension"] == 768
@@ -229,10 +245,14 @@ def test_generated_artifact_contract() -> None:
     assert reranker["sameItemTypeConstraint"] is True
     assert data["meta"]["model"]["dinoRerankWeight"] == 0.5
     assert reranker["weightGrid"] == [0.5]
+    assert reranker["candidateIndex"]["metric"].startswith("inner-product")
+    assert reranker["appearance"]["segmentation"]["method"] == "adaptive-lab-border-foreground-mask"
+    assert reranker["appearance"]["weights"] == {"neural": 0.7, "colour": 0.2, "texture": 0.1}
     assert data["meta"]["visionModel"]["historicalCoverage"] == data["meta"]["historicalImageCoverage"] == 508
     assert data["meta"]["visionModel"]["upcomingCoverage"] == data["meta"]["upcomingImageCoverage"] == 36
-    assert data["meta"]["visionCalibration"]["servingMedianDistance"] > (
-        data["meta"]["visionCalibration"]["historicalMedianDistance"]
+    assert (
+        data["meta"]["visionCalibration"]["servingMedianDistance"]
+        > (data["meta"]["visionCalibration"]["historicalMedianDistance"])
     )
     assert data["meta"]["model"]["trainingRows"] == len(data["historical"])
     assert data["meta"]["model"]["modelSelection"] == "Temporal holdout + ParameterGrid"
@@ -280,11 +300,15 @@ def test_generated_artifact_contract() -> None:
             assert all(match["visualScore"] is not None for match in item["matches"])
             assert all(match["fashionVisualScore"] is not None for match in item["matches"])
             assert all(match["dinoVisualScore"] is not None for match in item["matches"])
+            assert all(match["colourVisualScore"] is not None for match in item["matches"])
+            assert all(match["textureVisualScore"] is not None for match in item["matches"])
         else:
             assert item["hasVisualFeature"] is False
             assert all(match["visualScore"] is None for match in item["matches"])
             assert all(match["fashionVisualScore"] is None for match in item["matches"])
             assert all(match["dinoVisualScore"] is None for match in item["matches"])
+            assert all(match["colourVisualScore"] is None for match in item["matches"])
+            assert all(match["textureVisualScore"] is None for match in item["matches"])
         assert "design" in item
         assert "categoryType" in item
         assert "pattern" not in item
@@ -293,10 +317,7 @@ def test_generated_artifact_contract() -> None:
     history_by_id = {item["id"]: item for item in data["historical"]}
     image_backed_upcoming = [item for item in data["upcoming"] if item["imageUrl"]]
     assert image_backed_upcoming
-    assert any(
-        not item["recommendation"]["noSuitableMatch"]
-        for item in image_backed_upcoming
-    )
+    assert any(not item["recommendation"]["noSuitableMatch"] for item in image_backed_upcoming)
     assert all(
         item["matches"][0]["visualScore"] >= data["meta"]["model"]["minimumVisualScore"]
         for item in image_backed_upcoming

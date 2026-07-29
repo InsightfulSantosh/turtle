@@ -32,6 +32,10 @@ type Match = {
   historicalId: string;
   attributeScore: number;
   visualScore: number | null;
+  fashionVisualScore: number | null;
+  dinoVisualScore: number | null;
+  colourVisualScore: number | null;
+  textureVisualScore: number | null;
   hybridScore: number;
   attributeBreakdown: Record<string, number>;
 };
@@ -136,6 +140,31 @@ type Dataset = {
         candidateCount: number;
         weightGrid: number[];
         sameItemTypeConstraint: boolean;
+        candidateIndex?: {
+          engine: string;
+          metric: string;
+          fallback: string;
+        };
+        appearance?: {
+          segmentation: {
+            enabled: boolean;
+            method: string;
+            maskedImages: number;
+            fallbackImages: number;
+            meanForegroundCoverage: number;
+            meanMaskConfidence: number;
+          };
+          colourDescriptor: {
+            space: string;
+            binsPerChannel: number;
+            maskOnly: boolean;
+          };
+          textureDescriptor: {
+            method: string;
+            dimension: number;
+          };
+          weights: Record<"neural" | "colour" | "texture", number>;
+        };
       } | null;
     };
     model: {
@@ -1120,7 +1149,7 @@ function App() {
                     </div>
                     <p>
                       {visualMatchingAvailable
-                        ? "The image score uses deep visual embeddings; the overall score uses the selected attribute and visual weights."
+                        ? "The image score combines FashionSigLIP, DINOv2, masked garment colour and texture evidence; the overall score uses the selected attribute and visual weights."
                         : "Image scoring is disabled because the supplied filenames do not map to the SS27 identifiers; the overall score is attribute-only."}
                     </p>
                   </aside>
@@ -1236,7 +1265,7 @@ function App() {
             {[
               ["01", "Audit inputs", "Map both workbook schemas, remove constant or non-comparable fields, link images, and quarantine inconsistent outcome values."],
               ["02", "Retrieve visual analogues", dataset.meta.visionModel.reranker
-                ? `FashionSigLIP shortlists the top ${dataset.meta.visionModel.reranker.candidateCount} same-item candidates; DINOv2 reranks visual detail before structured evidence is combined.`
+                ? `FashionSigLIP retrieves the top ${dataset.meta.visionModel.reranker.candidateCount} same-item candidates with ${dataset.meta.visionModel.reranker.candidateIndex?.engine ?? "exact vector search"}; DINOv2, garment-masked CIELAB colour, and texture rerank visual detail before structured evidence is combined.`
                 : `Create ${dataset.meta.attributeAudit.activeCount}-field structured evidence and compare mapped product images.`],
               ["03", "Learn retrieval", "Use a forward season holdout and parameter search to tune neighbour count, forecast blend, and regularization."],
               ["04", "Forecast unit sales", "Ensemble similarity-weighted historical sales with a trained, regularized machine-learning forecast."],

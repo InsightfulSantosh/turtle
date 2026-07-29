@@ -70,6 +70,12 @@ def main() -> None:
                 candidate_count=matching.dino_candidate_count,
                 reranker_weight_grid=matching.dino_weight_grid,
                 require_same_item_type=matching.dino_require_same_item_type,
+                appearance_mask_enabled=matching.appearance_mask_enabled,
+                appearance_weights={
+                    "neural": matching.appearance_neural_weight,
+                    "colour": matching.appearance_colour_weight,
+                    "texture": matching.appearance_texture_weight,
+                },
                 batch_size=batch_size,
             )
 
