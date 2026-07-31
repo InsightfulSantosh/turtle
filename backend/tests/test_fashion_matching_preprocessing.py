@@ -2,10 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pytest
 from PIL import Image
 
-from fashion_matching.appearance import cosine_distance, extract_appearance_features
+from fashion_matching.appearance import (
+    cosine_distance,
+    extract_appearance_features,
+    extract_pipeline_appearance_features,
+)
+from fashion_matching.garment_segmentation import validate_garment_mask
 from fashion_matching.manifests import ManifestError, read_manifest
 from fashion_matching.models import ManifestRecord
 from fashion_matching.preprocessing import (
@@ -83,6 +89,48 @@ def test_appearance_features_mask_uniform_background_and_preserve_garment_colour
     assert red_features.image.getpixel((0, 0)) == (245, 245, 245)
     assert cosine_distance(red_features.colour_vector, blue_features.colour_vector) > 0.5
     assert len(red_features.texture_vector) == 16
+
+
+def test_appearance_does_not_score_background_when_all_masks_fail() -> None:
+    image = Image.new("RGB", (80, 80), "red")
+    features = extract_pipeline_appearance_features(
+        image,
+        item_type="OTSH",
+        mask_enabled=True,
+        segmenter=None,
+        allow_border_fallback=False,
+    )
+    assert features.segmentation_method == "fallback-original-image"
+    assert features.colour_vector is None
+    assert features.texture_vector is None
+    assert features.fallback_reason is None
+
+
+def test_garment_mask_quality_gate_accepts_contained_garment_and_rejects_spill() -> None:
+    mask = np.zeros((100, 80), dtype=bool)
+    mask[20:80, 20:60] = True
+    accepted = validate_garment_mask(
+        mask,
+        box=np.array([15, 15, 65, 85]),
+        detection_score=0.85,
+        minimum_detection_score=0.35,
+        minimum_coverage=0.04,
+        maximum_coverage=0.88,
+    )
+    assert accepted.accepted
+    assert accepted.method == "grounding-dino-sam2"
+
+    mask[:, :10] = True
+    rejected = validate_garment_mask(
+        mask,
+        box=np.array([15, 15, 65, 85]),
+        detection_score=0.85,
+        minimum_detection_score=0.35,
+        minimum_coverage=0.04,
+        maximum_coverage=0.88,
+    )
+    assert rejected.mask is None
+    assert rejected.fallback_reason == "mask_outside_detector_box"
 
 
 def test_manifest_requires_unique_image_ids_and_does_not_use_id_as_text(

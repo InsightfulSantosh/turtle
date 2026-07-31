@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 
-const artifactUrl = new URL("../app/generated-data.json", import.meta.url);
+const artifactUrl = new URL("../app/generated-data-otsh-preview.json", import.meta.url);
 const pageUrl = new URL("../app/page.tsx", import.meta.url);
 const stylesUrl = new URL("../app/globals.css", import.meta.url);
 
@@ -20,19 +20,27 @@ test("keeps the local application and fitted model contract intact", async () =>
   assert.equal(artifact.meta.model.demandLibrary, "scikit-learn");
   assert.equal(artifact.meta.visionModel.modelId, "Marqo/marqo-fashionSigLIP");
   assert.equal(artifact.meta.visionModel.reranker.modelId, "facebook/dinov2-base");
-  assert.equal(artifact.meta.visionModel.reranker.candidateCount, 50);
+  assert.equal(artifact.meta.visionModel.reranker.candidateCount, 30);
   assert.equal(artifact.meta.visionModel.reranker.sameItemTypeConstraint, true);
-  assert.equal(artifact.meta.model.dinoRerankWeight, 0.5);
-  assert.deepEqual(artifact.meta.visionModel.reranker.weightGrid, [0.5]);
+  assert.equal(artifact.meta.visionModel.reranker.sameDesignConstraint, true);
+  assert.equal(artifact.meta.model.dinoRerankWeight, 0.46);
+  assert.deepEqual(artifact.meta.visionModel.reranker.weightGrid, [0.4615384615]);
   assert.equal(artifact.meta.visionModel.reranker.candidateIndex.metric, "inner-product on L2-normalized FashionSigLIP embeddings");
-  assert.equal(artifact.meta.visionModel.reranker.appearance.segmentation.method, "adaptive-lab-border-foreground-mask");
+  assert.equal(
+    artifact.meta.visionModel.reranker.appearance.segmentation.method,
+    "grounding-dino-sam2-with-adaptive-background-fallback",
+  );
+  assert.equal(
+    artifact.meta.visionModel.reranker.appearance.segmentation.maskRequiredForColourAndTexture,
+    true,
+  );
   assert.deepEqual(artifact.meta.visionModel.reranker.appearance.weights, {
-    neural: 0.7,
-    colour: 0.2,
+    neural: 0.65,
+    colour: 0.25,
     texture: 0.1,
   });
   assert.match(artifact.meta.visualMethod, /Two-stage FashionSigLIP.*DINOv2/);
-  assert.equal(artifact.meta.historicalImageCoverage, 508);
+  assert.equal(artifact.meta.historicalImageCoverage, 390);
   assert.equal(artifact.meta.upcomingImageCoverage, 36);
   assert.ok([3, 5, 8].includes(artifact.meta.model.topK));
   assert.equal(artifact.meta.model.minimumVisualScore, 0.5);
@@ -46,7 +54,7 @@ test("keeps the local application and fitted model contract intact", async () =>
   assert.equal(artifact.meta.model.modelSelection, "Temporal holdout + ParameterGrid");
   assert.equal(Object.values(artifact.meta.matchConfidenceCounts).reduce((sum, value) => sum + value, 0), artifact.meta.upcomingItems);
   assert.equal(Object.values(artifact.meta.demandUncertaintyCounts).reduce((sum, value) => sum + value, 0), artifact.meta.upcomingItems);
-  assert.equal(artifact.meta.attributeAudit.activeCount, 5);
+  assert.equal(artifact.meta.attributeAudit.activeCount, 4);
   assert.equal(artifact.meta.dataQuality.zeroSalesHistoricalRowsExcluded, 142);
   assert.equal(artifact.meta.dataQuality.upcomingRowsExcludedUnseenItem, 114);
   assert.ok(artifact.historical.every(({ salesTarget }) => salesTarget > 0));
@@ -60,9 +68,9 @@ test("keeps the local application and fitted model contract intact", async () =>
     artifact.meta.historicalImageCoverage,
   );
   assert.deepEqual(Object.keys(artifact.meta.model.attributeWeights), [
-    "item", "design", "category_type", "fabric", "colour",
+    "design", "category_type", "fabric", "colour",
   ]);
-  assert.deepEqual(artifact.meta.attributeAudit.excludedConstants, []);
+  assert.equal(artifact.meta.attributeAudit.excludedConstants[0].label, "Item");
   assert.ok(artifact.upcoming.every(({ recommendation }) => (
     recommendation.confidence === recommendation.matchConfidence
     && ["Narrow", "Moderate", "Wide"].includes(recommendation.demandUncertainty)
@@ -74,10 +82,7 @@ test("keeps the local application and fitted model contract intact", async () =>
   const imageBackedUpcoming = artifact.upcoming.filter(({ imageUrl }) => Boolean(imageUrl));
   assert.ok(imageBackedUpcoming.some(({ recommendation }) => !recommendation.noSuitableMatch));
   assert.ok(imageBackedUpcoming.every(({ matches }) => matches.every((match) => (
-    match.fashionVisualScore !== null
-    && match.dinoVisualScore !== null
-    && match.colourVisualScore !== null
-    && match.textureVisualScore !== null
+    match.fashionVisualScore !== null && match.dinoVisualScore !== null
   ))));
   assert.ok(imageBackedUpcoming.every(({ matches, recommendation }) => (
     recommendation.noSuitableMatch
@@ -92,8 +97,8 @@ test("keeps the local application and fitted model contract intact", async () =>
     && recommendation.demandUncertainty === "Wide"
   )));
   assert.ok(artifact.upcoming.every(({ matches }) => matches.every(({ attributeBreakdown }) => (
-    Object.keys(attributeBreakdown).length === 5
-    && ["item", "design", "category_type", "fabric", "colour"]
+    Object.keys(attributeBreakdown).length === 4
+    && ["design", "category_type", "fabric", "colour"]
       .every((key) => key in attributeBreakdown)
   ))));
   assert.ok(artifact.historical.every((item) => !("mrp" in item)));
@@ -118,8 +123,8 @@ test("keeps the local application and fitted model contract intact", async () =>
   assert.match(pageSource, /\$\{context\} product attributes/);
   assert.doesNotMatch(pageSource, /Upcoming match attributes/);
   assert.doesNotMatch(pageSource, /Historical match attributes/);
-  assert.match(pageSource, /View all \$\{catalogAttributeOrder\.length\}/);
-  assert.match(pageSource, /Show key attributes/);
+  assert.match(pageSource, /Show all/);
+  assert.match(pageSource, /Show less/);
   assert.doesNotMatch(pageSource, /\+5 Show all 9/);
   assert.doesNotMatch(pageSource, /4 of 9 shown/);
   assert.doesNotMatch(pageSource, /9 of 9 shown/);
@@ -132,7 +137,11 @@ test("keeps the local application and fitted model contract intact", async () =>
   assert.match(pageSource, /Attribute-by-attribute comparison/);
   assert.match(pageSource, /Upcoming style/);
   assert.match(pageSource, /Historical analogue/);
-  assert.match(pageSource, /image score combines FashionSigLIP, DINOv2, masked garment colour and texture evidence/i);
+  assert.match(pageSource, /<dt>Colour family<\/dt>/);
+  assert.match(pageSource, /sameColourFamilyConstraint/);
+  assert.match(pageSource, /displayedColourFamily/);
+  assert.match(pageSource, /hasSameColourFamily/);
+  assert.match(pageSource, /image score combines FashionSigLIP, multi-scale body DINOv2, masked garment colour and texture evidence/i);
   assert.match(pageSource, /const visibleUpcoming =/);
   assert.match(pageSource, /\.filter\(\(match\) => Boolean\(historyById\.get\(match\.historicalId\)\?\.imageUrl\)\)/);
   assert.match(pageSource, /NEXT_PUBLIC_TURTLE_API_URL/);

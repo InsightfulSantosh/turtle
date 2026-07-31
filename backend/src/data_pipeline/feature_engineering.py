@@ -10,6 +10,7 @@ from data_pipeline.preprocessing import (
     parse_integer,
     parse_number,
 )
+from fashion_matching.taxonomy import colour_family
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,7 @@ def product_attributes(row: dict[str, Any]) -> dict[str, Any]:
         "fabric": row["fabric"],
         "season": normalize_text(row["season"]),
         "colour": normalize_text(row["colour"]),
+        "colourFamily": colour_family(row["colour"]),
         "imageUrl": None,
         "hasVisualFeature": False,
     }

@@ -55,9 +55,25 @@ class RealDataPipeline:
             ingested.historical_rows,
             "CON",
         )
+        # Support the current SS27 master layout, which provides the product
+        # identifier and category fields under the workbook's display names.
+        # Normalize it into the legacy canonical source names before cleaning.
+        upcoming_input = []
+        for row in ingested.upcoming_rows:
+            if "IMAGE ID" in row:
+                normalized = dict(row)
+                normalized["CC (SEG-1+2+3)"] = row.get("IMAGE ID")
+                normalized["COLOUR NAME"] = row.get("COLOR_NAME")
+                normalized["CAT-3"] = row.get("CAT3")
+                normalized.pop("IMAGE ID", None)
+                normalized.pop("COLOR_NAME", None)
+                normalized.pop("CAT3", None)
+                upcoming_input.append(normalized)
+            else:
+                upcoming_input.append(row)
         upcoming_rows, upcoming_report = preprocess_rows(
             "Upcoming",
-            ingested.upcoming_rows,
+            upcoming_input,
             "CC (SEG-1+2+3)",
         )
         historical_rows = standardize_historical_schema(historical_rows)
@@ -113,8 +129,12 @@ class RealDataPipeline:
     def run(
         self,
         vision_builder: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        *,
+        item_type: str | None = None,
     ) -> PipelineRunSummary:
         source = self.build_source()
+        if item_type is not None:
+            source = self._restrict_source_to_item_type(source, item_type)
         vision_output = vision_builder(source) if vision_builder is not None else self._vision_metadata(source)
         artifact = build_model_artifact(source, vision_output)
         self._write_artifact(artifact)
@@ -127,6 +147,47 @@ class RealDataPipeline:
             selection_method=str(model["modelSelection"]),
             backtest_wape=float(model["backtest"]["wape"]),
         )
+
+    @staticmethod
+    def _restrict_source_to_item_type(source: dict[str, Any], item_type: str) -> dict[str, Any]:
+        """Create an auditable, self-contained item-type artifact scope."""
+
+        selected_type = " ".join(item_type.upper().split())
+        if not selected_type:
+            raise ValueError("item_type must not be blank")
+
+        def belongs_to_scope(item: dict[str, Any]) -> bool:
+            return " ".join(str(item.get("itemType") or "").upper().split()) == selected_type
+
+        historical = [item for item in source["historical"] if belongs_to_scope(item)]
+        upcoming = [item for item in source["upcoming"] if belongs_to_scope(item)]
+        if not historical:
+            raise ValueError(f"No historical products found for item type {selected_type}")
+        if not upcoming:
+            raise ValueError(f"No upcoming products found for item type {selected_type}")
+
+        meta = dict(source["meta"])
+        historical_coverage = sum(bool(item.get("imageUrl")) for item in historical)
+        upcoming_coverage = sum(bool(item.get("imageUrl")) for item in upcoming)
+        meta.update(
+            {
+                "historicalItems": len(historical),
+                "upcomingItems": len(upcoming),
+                "historicalImageCoverage": historical_coverage,
+                "upcomingImageCoverage": upcoming_coverage,
+                "missingUpcomingImages": [item["id"] for item in upcoming if not item.get("imageUrl")],
+                "imageMappingStatus": (
+                    f"Mapped {historical_coverage} historical and {upcoming_coverage} upcoming "
+                    f"{selected_type} product images by catalogue identifier."
+                ),
+                "artifactScope": {
+                    "itemType": selected_type,
+                    "historicalItems": len(historical),
+                    "upcomingItems": len(upcoming),
+                },
+            }
+        )
+        return {"meta": meta, "historical": historical, "upcoming": upcoming}
 
     def _write_artifact(self, artifact: dict[str, Any]) -> None:
         output = self.settings.output_path

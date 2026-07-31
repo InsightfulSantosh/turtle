@@ -118,6 +118,7 @@ def test_two_stage_visual_artifact_reranks_only_same_item_type_candidates(
     for identifier, colour in (
         ("OTSH-100-1001", (255, 0, 0)),
         ("OTSH-101-1001", (0, 255, 0)),
+        ("OTSH-102-1001", (255, 0, 0)),
         ("OTTR-102-1001", (255, 0, 0)),
     ):
         _save_image(settings.historical_image_root / f"{identifier}.jpg", colour)
@@ -128,6 +129,8 @@ def test_two_stage_visual_artifact_reranks_only_same_item_type_candidates(
                 "id": "AW25-OTSH-100-1001",
                 "sourceId": "OTSH-100-1001",
                 "itemType": "OTSH",
+                "design": "CHECKS",
+                "colour": "BLUE",
                 "imageUrl": "/product-images/historical/OTSH-100-1001",
                 "hasVisualFeature": False,
             },
@@ -135,13 +138,26 @@ def test_two_stage_visual_artifact_reranks_only_same_item_type_candidates(
                 "id": "AW25-OTSH-101-1001",
                 "sourceId": "OTSH-101-1001",
                 "itemType": "OTSH",
+                "design": "CHECKS",
+                "colour": "NAVY BLUE",
                 "imageUrl": "/product-images/historical/OTSH-101-1001",
+                "hasVisualFeature": False,
+            },
+            {
+                "id": "AW25-OTSH-102-1001",
+                "sourceId": "OTSH-102-1001",
+                "itemType": "OTSH",
+                "design": "STRIPES",
+                "colour": "BLUE",
+                "imageUrl": "/product-images/historical/OTSH-102-1001",
                 "hasVisualFeature": False,
             },
             {
                 "id": "AW25-OTTR-102-1001",
                 "sourceId": "OTTR-102-1001",
                 "itemType": "OTTR",
+                "design": "CHECKS",
+                "colour": "BLUE",
                 "imageUrl": "/product-images/historical/OTTR-102-1001",
                 "hasVisualFeature": False,
             },
@@ -150,6 +166,8 @@ def test_two_stage_visual_artifact_reranks_only_same_item_type_candidates(
             {
                 "id": "OTSH-200-1001",
                 "itemType": "OTSH",
+                "design": "CHECKS",
+                "colour": "ROYAL BLUE",
                 "imageUrl": "/product-images/upcoming/OTSH-200-1001",
                 "hasVisualFeature": False,
             },
@@ -163,14 +181,17 @@ def test_two_stage_visual_artifact_reranks_only_same_item_type_candidates(
         reranker=FakeDetailEncoder(),
         preprocessor=ImagePreprocessor(pad_to_square=False),
         candidate_count=2,
+        pattern_gate_enabled=False,
     )
 
     assert output["reranker"]["modelId"] == "local/test-dino-reranker"
     assert output["reranker"]["candidateIndex"]["metric"].startswith("inner-product")
+    assert output["reranker"]["sameItemTypeConstraint"] is True
+    assert output["reranker"]["sameDesignConstraint"] is True
     assert output["reranker"]["appearance"]["colourDescriptor"]["space"] == "CIELAB"
     assert output["reranker"]["appearance"]["weights"] == {
-        "neural": 0.7,
-        "colour": 0.2,
+        "neural": 0.6,
+        "colour": 0.3,
         "texture": 0.1,
     }
     upcoming_candidates = [row for row in output["candidatePairs"] if row["leftId"] == "OTSH-200-1001"]
@@ -180,3 +201,70 @@ def test_two_stage_visual_artifact_reranks_only_same_item_type_candidates(
         "AW25-OTSH-101-1001",
     }
     assert all("colourDistance" in row and "textureDistance" in row for row in upcoming_candidates)
+    assert all(row["colourDistance"] is None and row["textureDistance"] is None for row in upcoming_candidates)
+    segmentation = output["reranker"]["appearance"]["segmentation"]
+    assert segmentation["maskRequiredForColourAndTexture"] is True
+    assert segmentation["unavailableAppearanceImages"] == 5
+
+
+def test_pattern_gate_excludes_visibly_different_candidates_with_the_same_design_label(
+    tmp_path: Path,
+) -> None:
+    settings = PipelineSettings(
+        data_root=tmp_path / "DATA",
+        temporary_root=tmp_path / "tmp",
+        output_path=tmp_path / "artifact.json",
+    )
+    _save_image(settings.historical_image_root / "OTSH-100-1001.jpg", (255, 0, 0))
+    _save_image(settings.historical_image_root / "OTSH-101-1001.jpg", (0, 255, 0))
+    _save_image(settings.upcoming_image_root / "OTSH-200-1001.jpg", (255, 0, 0))
+    source = {
+        "historical": [
+            {
+                "id": "AW25-OTSH-100-1001",
+                "sourceId": "OTSH-100-1001",
+                "itemType": "OTSH",
+                "design": "CHECKS",
+                "colour": "BLUE",
+                "imageUrl": "/product-images/historical/OTSH-100-1001",
+            },
+            {
+                "id": "AW25-OTSH-101-1001",
+                "sourceId": "OTSH-101-1001",
+                "itemType": "OTSH",
+                "design": "CHECKS",
+                "colour": "NAVY BLUE",
+                "imageUrl": "/product-images/historical/OTSH-101-1001",
+            },
+        ],
+        "upcoming": [
+            {
+                "id": "OTSH-200-1001",
+                "itemType": "OTSH",
+                "design": "CHECKS",
+                "colour": "ROYAL BLUE",
+                "imageUrl": "/product-images/upcoming/OTSH-200-1001",
+            }
+        ],
+    }
+
+    output = build_artifact_vision_output(
+        source,
+        settings=settings,
+        encoder=FakeEncoder(),
+        reranker=FakeDetailEncoder(),
+        preprocessor=ImagePreprocessor(pad_to_square=False),
+        candidate_count=2,
+        pattern_max_distance=0.1,
+    )
+
+    upcoming_candidates = [row for row in output["candidatePairs"] if row["leftId"] == "OTSH-200-1001"]
+    assert [row["rightId"] for row in upcoming_candidates] == ["AW25-OTSH-100-1001"]
+    assert upcoming_candidates[0]["patternDistance"] < 1e-6
+    assert output["reranker"]["patternGate"] == {
+        "enabled": True,
+        "method": "three-scale-centre-garment-body-DINOv2",
+        "designs": "checks, stripes, prints, structured fabrics",
+        "maximumDistance": 0.1,
+        "policy": "exclude candidate when the body-pattern distance exceeds the limit",
+    }

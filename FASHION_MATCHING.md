@@ -36,19 +36,32 @@ For the real-data planner artifact, the production visual path is two-stage:
 
 ```text
 Input product image
-  -> conservative garment foreground masking (with original-image fallback)
-  -> FashionSigLIP embedding retrieves the top 50 same-item-type candidates through FAISS
-  -> DINOv2 evaluates structure and local visual detail inside that shortlist
+  -> item-type prompt drives Grounding DINO garment detection
+  -> SAM 2.1 traces the detected garment and a quality gate accepts or rejects the mask
+  -> clean-background border masking is an audited secondary fallback only
+  -> accepted garment masks are white-background composited and cropped with an 8% safety margin
+  -> source item type, design and canonical colour family form strict eligibility cohorts
+  -> FashionSigLIP embedding retrieves the top 50 eligible candidates through FAISS
+  -> body-only DINOv2 evaluates 82%, 66% and 50% centre crops for pattern scale and construction
+  -> a pattern gate excludes mismatched checks, stripes, prints and structured fabrics before ranking
   -> masked CIELAB histogram measures garment colour without background pixels
   -> masked texture descriptor adds surface/print evidence
-  -> calibrated weighted reranker combines neural (70%), colour (20%) and texture (10%) evidence
+  -> calibrated weighted reranker combines FashionSigLIP (25%), body-DINOv2 (35%), colour (30%) and texture (10%) evidence
   -> structured attributes and the hybrid visual score rank the final analogue set
 ```
 
-The same-item-type constraint is relaxed only when it would leave fewer than
-two image-backed historical candidates. FAISS `IndexFlatIP` is used where the
-runtime provides it; the local development fallback is an exact NumPy
-inner-product search, so the ranking remains deterministic and correct.
+Item type, source design and canonical colour family are strict constraints: a
+product with no eligible historical cohort receives no visual analogue instead
+of falling back to a different type, design or colour family. Only clear
+source-taxonomy equivalents are aligned
+(`PLAIN`/`PLAINS`/`SOLID`, singular/plural checks and stripes, and the pigment-print
+spelling variant). If neither SAM 2 nor the clean-background fallback produces a credible mask, colour and texture are explicitly unavailable
+for that pair; they are never calculated from the original image background.
+FashionSigLIP and DINOv2 may still use the original image as neural-only
+fallback so an imperfect catalogue photo does not disappear from retrieval.
+FAISS `IndexFlatIP` is used where the runtime provides it; the local development
+fallback is an exact NumPy inner-product search, so the ranking remains
+deterministic and correct.
 If DINOv2 is disabled, unavailable, or its configured weight is `0`, the
 planner retains the FashionSigLIP baseline; a partial reranker is never allowed
 to introduce a new candidate.
@@ -71,6 +84,24 @@ set +a
 Before production indexing, replace `FASHION_MATCHING_MODEL_REVISION=main` with
 an exact Hugging Face commit hash. Models using remote model code must be
 security-reviewed and pinned before deployment.
+
+The garment path also installs the pinned SAM 2 package recorded in
+`backend/requirements-fashion-matching.txt`. It downloads the configured
+Grounding DINO and SAM 2.1 weights on the first rebuild. Pin
+`FASHION_GARMENT_DETECTOR_REVISION` and `FASHION_GARMENT_SAM2_REVISION` before
+deployment, then retain the generated artifact's resolved revisions and mask
+quality statistics as the audit record.
+
+To create a smaller, non-production review artifact for a single item type,
+use a separate output path. For example, this keeps the full browser artifact
+unchanged while building an OTSH-only preview:
+
+```bash
+env HF_HOME=/private/tmp/turtle-hf-cache HF_HUB_OFFLINE=1 \
+  .venv/bin/python -m data_pipeline.prepare_real_data \
+  --with-vision --item-type OTSH \
+  --output frontend/app/generated-data-otsh-preview.json
+```
 
 Device configuration:
 

@@ -118,3 +118,32 @@ def test_catalogue_images_are_mapped_by_source_identifier(
     assert features.upcoming[0]["imageUrl"] == ("/product-images/upcoming/OTSH-200-1002")
     assert features.upcoming[1]["imageUrl"] is None
     assert all(item["hasVisualFeature"] is False for item in [*features.historical, *features.upcoming])
+
+
+def test_item_type_scope_keeps_only_requested_catalogue_items(tmp_path: Path) -> None:
+    settings = PipelineSettings(
+        data_root=tmp_path / "DATA",
+        temporary_root=tmp_path / "tmp",
+        output_path=tmp_path / "artifact.json",
+    )
+    source = {
+        "meta": {"title": "test"},
+        "historical": [
+            {"id": "AW25-OTSH-1", "itemType": "OTSH", "imageUrl": "/historical/1"},
+            {"id": "AW25-OTTR-1", "itemType": "OTTR", "imageUrl": "/historical/2"},
+        ],
+        "upcoming": [
+            {"id": "OTSH-2", "itemType": "OTSH", "imageUrl": "/upcoming/2"},
+            {"id": "OTTR-2", "itemType": "OTTR", "imageUrl": None},
+        ],
+    }
+
+    scoped = RealDataPipeline(settings)._restrict_source_to_item_type(source, "otsh")
+
+    assert [item["id"] for item in scoped["historical"]] == ["AW25-OTSH-1"]
+    assert [item["id"] for item in scoped["upcoming"]] == ["OTSH-2"]
+    assert scoped["meta"]["artifactScope"] == {
+        "itemType": "OTSH",
+        "historicalItems": 1,
+        "upcomingItems": 1,
+    }

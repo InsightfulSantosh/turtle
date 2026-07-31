@@ -57,6 +57,7 @@ UPCOMING_COLUMN_MAP = {
 }
 UPCOMING_IGNORED_SOURCE_COLUMNS = frozenset({
     "PROPOSED MRP",
+    "MRP",
     "SL",
 })
 

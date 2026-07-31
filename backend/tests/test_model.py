@@ -77,7 +77,14 @@ def test_two_stage_artifact_does_not_allow_dino_to_add_unshortlisted_products() 
                 "id": "OTSH-QUERY",
                 "sourceId": None,
                 "imageUrl": "/product-images/upcoming/OTSH-QUERY",
-            }
+            },
+            {
+                **product("OTSH-NO-CANDIDATE", "OTSH", 0),
+                "id": "OTSH-NO-CANDIDATE",
+                "sourceId": None,
+                "design": "STRIPES",
+                "imageUrl": "/product-images/upcoming/OTSH-NO-CANDIDATE",
+            },
         ],
     }
     pairs = []
@@ -115,6 +122,9 @@ def test_two_stage_artifact_does_not_allow_dino_to_add_unshortlisted_products() 
 
     matches = artifact["upcoming"][0]["matches"]
     assert {match["historicalId"] for match in matches} == {"AW25-OTSH-1", "AW25-OTSH-2"}
+    no_candidate = artifact["upcoming"][1]
+    assert no_candidate["matches"] == []
+    assert no_candidate["recommendation"]["noSuitableMatch"] is True
     assert artifact["meta"]["visionModel"]["reranker"]["modelId"] == "test/dino"
 
 
@@ -233,20 +243,21 @@ def test_generated_artifact_contract() -> None:
     assert data["meta"]["upcomingSeason"] == "SS27"
     assert data["meta"]["model"]["demandLibrary"] == "scikit-learn"
     assert data["meta"]["visualMethod"] == (
-        "Two-stage FashionSigLIP candidate retrieval with DINOv2, masked CIELAB colour "
-        "and texture visual-detail reranking"
+        "Two-stage FashionSigLIP candidate retrieval with DINOv2, Grounding DINO + SAM 2 "
+        "garment masking, masked CIELAB colour and texture visual-detail reranking"
     )
     assert data["meta"]["visionModel"]["modelId"] == "Marqo/marqo-fashionSigLIP"
     assert data["meta"]["visionModel"]["embeddingDimension"] == 768
     reranker = data["meta"]["visionModel"]["reranker"]
     assert reranker["modelId"] == "facebook/dinov2-base"
     assert reranker["embeddingDimension"] == 768
-    assert reranker["candidateCount"] == 50
+    assert reranker["candidateCount"] == 30
     assert reranker["sameItemTypeConstraint"] is True
+    assert "sameDesignConstraint" not in reranker
     assert data["meta"]["model"]["dinoRerankWeight"] == 0.5
     assert reranker["weightGrid"] == [0.5]
     assert reranker["candidateIndex"]["metric"].startswith("inner-product")
-    assert reranker["appearance"]["segmentation"]["method"] == "adaptive-lab-border-foreground-mask"
+    assert reranker["appearance"]["segmentation"]["method"] == "grounding-dino-sam2-with-adaptive-background-fallback"
     assert reranker["appearance"]["weights"] == {"neural": 0.7, "colour": 0.2, "texture": 0.1}
     assert data["meta"]["visionModel"]["historicalCoverage"] == data["meta"]["historicalImageCoverage"] == 508
     assert data["meta"]["visionModel"]["upcomingCoverage"] == data["meta"]["upcomingImageCoverage"] == 36

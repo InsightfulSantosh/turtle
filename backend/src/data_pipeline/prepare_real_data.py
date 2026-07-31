@@ -10,6 +10,7 @@ from data_pipeline.settings import PipelineSettings
 from fashion_matching.artifact_vision import build_artifact_vision_output
 from fashion_matching.config import MatchingSettings
 from fashion_matching.encoders import create_dino_encoder, create_encoder
+from fashion_matching.garment_segmentation import GroundedSam2GarmentSegmenter
 from fashion_matching.preprocessing import ImagePreprocessor
 
 
@@ -27,6 +28,10 @@ def main() -> None:
     parser.add_argument("--model-revision")
     parser.add_argument("--device")
     parser.add_argument("--batch-size", type=int)
+    parser.add_argument(
+        "--item-type",
+        help="Build a scoped artifact containing only one canonical item type, such as OTSH",
+    )
     args = parser.parse_args()
 
     settings = PipelineSettings.from_project(args.output)
@@ -59,6 +64,21 @@ def main() -> None:
             pad_to_square=matching.pad_to_square,
             crop_uniform_background=matching.crop_uniform_background,
         )
+        garment_segmenter = (
+            GroundedSam2GarmentSegmenter(
+                detector_model_id=matching.garment_detector_model_id,
+                detector_revision=matching.garment_detector_revision,
+                sam2_model_id=matching.garment_sam2_model_id,
+                sam2_revision=matching.garment_sam2_revision,
+                configured_device=device,
+                detector_threshold=matching.garment_detector_threshold,
+                text_threshold=matching.garment_text_threshold,
+                minimum_coverage=matching.garment_minimum_coverage,
+                maximum_coverage=matching.garment_maximum_coverage,
+            )
+            if matching.appearance_mask_enabled and matching.garment_segmentation_enabled
+            else None
+        )
 
         def vision_builder(source):
             return build_artifact_vision_output(
@@ -70,7 +90,13 @@ def main() -> None:
                 candidate_count=matching.dino_candidate_count,
                 reranker_weight_grid=matching.dino_weight_grid,
                 require_same_item_type=matching.dino_require_same_item_type,
+                require_same_design=matching.dino_require_same_design,
+                require_same_colour_family=matching.dino_require_same_colour_family,
+                pattern_gate_enabled=matching.pattern_gate_enabled,
+                pattern_max_distance=matching.pattern_max_distance,
                 appearance_mask_enabled=matching.appearance_mask_enabled,
+                garment_segmenter=garment_segmenter,
+                allow_border_mask_fallback=matching.garment_segmentation_border_fallback,
                 appearance_weights={
                     "neural": matching.appearance_neural_weight,
                     "colour": matching.appearance_colour_weight,
@@ -79,7 +105,7 @@ def main() -> None:
                 batch_size=batch_size,
             )
 
-    summary = RealDataPipeline(settings).run(vision_builder)
+    summary = RealDataPipeline(settings).run(vision_builder, item_type=args.item_type)
     print(
         f"Wrote {summary.output_path} with "
         f"{summary.historical_items} historical and "

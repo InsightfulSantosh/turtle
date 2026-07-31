@@ -15,6 +15,8 @@ from sklearn.model_selection import LeaveOneOut, ParameterGrid
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
+from fashion_matching.taxonomy import colour_family
+
 MODEL_VERSION = "4.2.0"
 DEFAULT_TARGET_SELL_THROUGH = 0.70
 PACK_SIZE = 25
@@ -34,35 +36,6 @@ DESIGN_FAMILY = {
     "PLAINS": "SOLID",
     "WBC DOBBY": "TEXTURE",
     "DOBBY/STRUCTURE": "TEXTURE",
-}
-
-COLOUR_FAMILY = {
-    "NAVY BLUE": "BLUE",
-    "SKY BLUE": "BLUE",
-    "LIGHT BLUE": "BLUE",
-    "PEACOCK BLUE": "BLUE",
-    "TEAL": "BLUE",
-    "INDIGO": "BLUE",
-    "DARK GREEN": "GREEN",
-    "LIGHT GREEN": "GREEN",
-    "MINT": "GREEN",
-    "OLIVE": "GREEN",
-    "CREAM": "NEUTRAL",
-    "IVORY": "NEUTRAL",
-    "BEIGE": "NEUTRAL",
-    "KHAKI": "NEUTRAL",
-    "STONE": "NEUTRAL",
-    "WHITE": "NEUTRAL",
-    "GREY": "GREY",
-    "DARK GREY": "GREY",
-    "LIGHT GREY": "GREY",
-    "BLACK": "GREY",
-    "MAROON": "RED",
-    "CORAL": "RED",
-    "RUST": "RED",
-    "PINK": "RED",
-    "OCHRE": "YELLOW",
-    "LEMON": "YELLOW",
 }
 
 BASE_ATTRIBUTE_WEIGHTS = {
@@ -286,7 +259,9 @@ def colour_similarity(left: Any, right: Any) -> float:
     a, b = norm(left), norm(right)
     if a == b:
         return 1.0
-    return 0.66 if COLOUR_FAMILY.get(a, a) == COLOUR_FAMILY.get(b, b) else 0.0
+    left_family = colour_family(a)
+    right_family = colour_family(b)
+    return 0.66 if left_family is not None and left_family == right_family else 0.0
 
 
 def attribute_similarity(
@@ -409,7 +384,7 @@ def demand_features(item: dict[str, Any]) -> dict[str, float]:
         "item_type": norm(item.get("itemType")),
         "design": DESIGN_FAMILY.get(design, design),
         "category_type": norm(item.get("categoryType")),
-        "colour": COLOUR_FAMILY.get(colour, colour),
+        "colour": colour_family(colour) or colour,
     }
     features = {f"{field}={value or 'UNKNOWN'}": 1.0 for field, value in categorical_values.items()}
     features.update({f"fabric={token}": 1.0 for token in token_set(item.get("fabric"))})
@@ -755,11 +730,16 @@ def recommend_one(
     top_k = int(model["topK"])
     selected = matches[:top_k]
     history_index = {historical["id"]: index for index, historical in enumerate(history)}
-    weights = np.asarray([max(float(match["hybridScore"]), 0.01) ** 2 for match in selected])
-    selected_targets = np.asarray([targets[history_index[match["historicalId"]]] for match in selected])
-    analogue_sales = float(np.average(selected_targets, weights=weights))
     regression_sales = float(demand_pipeline.predict([demand_features(item)])[0])
     regression_sales = clamp(regression_sales, 0, MAX_BUY)
+    if selected:
+        weights = np.asarray([max(float(match["hybridScore"]), 0.01) ** 2 for match in selected])
+        selected_targets = np.asarray([targets[history_index[match["historicalId"]]] for match in selected])
+        analogue_sales = float(np.average(selected_targets, weights=weights))
+    else:
+        # A strict retrieval cohort can legitimately have no historical
+        # analogue. Forecast from the regression model and record no analogue.
+        analogue_sales = 0.0
     top_scores = [float(match["hybridScore"]) for match in selected]
     top_visual_available = bool(selected and selected[0].get("visualScore") is not None)
     issue_count = sum(len(quality_flags(history[history_index[match["historicalId"]]])) for match in selected[:3])
@@ -1079,10 +1059,14 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
     retrieval_history = [historical for historical in history if historical.get("imageUrl")] or history
     for item in upcoming:
         matches: list[dict[str, Any]] = []
-        shortlist_ids = candidate_history_ids.get(str(item["id"]))
+        shortlist_ids = candidate_history_ids.get(str(item["id"]), set())
+        # In two-stage retrieval, an absent shortlist means the product did not
+        # pass a mandatory retrieval constraint (for example same item type and
+        # design). Do not silently replace that true no-match with the whole
+        # historical catalogue.
         eligible_history = (
             [historical for historical in retrieval_history if str(historical["id"]) in shortlist_ids]
-            if shortlist_ids
+            if candidate_rows
             else retrieval_history
         )
         for historical in eligible_history:
@@ -1214,7 +1198,7 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
                     "Attribute retrieval + scikit-learn Ridge sales forecast + inventory policy"
                     if not all_visual_scores
                     else (
-                        "Two-stage FashionSigLIP retrieval + DINOv2, masked CIELAB colour and texture "
+                        "Two-stage FashionSigLIP retrieval + multi-scale body DINOv2, masked CIELAB colour and texture "
                         "visual reranking + attribute constraints + scikit-learn Ridge sales forecast + "
                         "inventory policy"
                     )

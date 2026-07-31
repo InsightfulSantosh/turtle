@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import dataJson from "./generated-data.json";
+import dataJson from "./generated-data-otsh-preview.json";
 
 type Confidence = "High" | "Medium" | "Low";
 type DemandUncertainty = "Narrow" | "Moderate" | "Wide";
@@ -17,6 +17,7 @@ type HistoricalItem = {
   categoryType: string;
   fabric: string;
   colour: string;
+  colourFamily?: string;
   order: number;
   dispatch: number;
   sales: number;
@@ -50,6 +51,7 @@ type UpcomingItem = {
   fabric: string;
   season: string;
   colour: string;
+  colourFamily?: string;
   imageUrl?: string | null;
   hasVisualFeature: boolean;
   matches: Match[];
@@ -78,7 +80,7 @@ type UpcomingItem = {
 };
 
 type ComparableProduct = Pick<UpcomingItem,
-  "itemType" | "design" | "categoryType" | "fabric" | "colour"
+  "itemType" | "design" | "categoryType" | "fabric" | "colour" | "colourFamily"
 >;
 
 type Dataset = {
@@ -140,6 +142,8 @@ type Dataset = {
         candidateCount: number;
         weightGrid: number[];
         sameItemTypeConstraint: boolean;
+        sameDesignConstraint?: boolean;
+        sameColourFamilyConstraint?: boolean;
         candidateIndex?: {
           engine: string;
           metric: string;
@@ -150,9 +154,16 @@ type Dataset = {
             enabled: boolean;
             method: string;
             maskedImages: number;
+            semanticMaskedImages?: number;
+            borderFallbackMaskedImages?: number;
+            unavailableAppearanceImages?: number;
             fallbackImages: number;
+            fallbackReasons?: Record<string, number>;
             meanForegroundCoverage: number;
             meanMaskConfidence: number;
+            maskRequiredForColourAndTexture?: boolean;
+            unmaskedNeuralFallback?: string;
+            model?: Record<string, string | number>;
           };
           colourDescriptor: {
             space: string;
@@ -247,6 +258,42 @@ const visualMatchingAvailable =
   dataset.meta.visionModel.historicalCoverage > 0;
 const numberFormatter = new Intl.NumberFormat("en-IN");
 
+// The artifact carries the controlled family after a current rebuild. This
+// fallback lets the screen label the existing preview as well; it is display
+// only—the Python retrieval taxonomy remains the matching authority.
+const colourFamilyFallbacks: Array<[string, readonly string[]]> = [
+  ["AQUA", ["AQUA", "CYAN", "TURQUOISE"]],
+  ["TEAL", ["TEAL", "SEA GREEN", "PETROL"]],
+  ["GREEN", ["GREEN", "MINT", "OLIVE", "LIME", "PISTA", "SAGE", "BOTTLE"]],
+  ["BLUE", ["BLUE", "INDIGO", "NAVY", "SKY"]],
+  ["NEUTRAL", ["BEIGE", "CREAM", "IVORY", "OFF WHITE", "NATURAL", "KHAKI", "STONE", "TAN", "FAWN"]],
+  ["BROWN", ["BROWN", "CHOCOLATE", "COCOA", "COFFEE"]],
+  ["GREY", ["GREY", "GRAY", "CHARCOAL"]],
+  ["BLACK", ["BLACK"]],
+  ["WHITE", ["WHITE"]],
+  ["METALLIC", ["SILVER", "GOLD", "BRONZE", "COPPER"]],
+  ["RED", ["RED", "MAROON", "WINE", "RUST"]],
+  ["ORANGE", ["ORANGE", "CORAL", "PEACH"]],
+  ["YELLOW", ["YELLOW", "LEMON", "MUSTARD", "OCHRE"]],
+  ["PINK", ["PINK", "ROSE", "MAGENTA", "MEGANTA", "ONION"]],
+  ["PURPLE", ["PURPLE", "LAVENDER", "MAUVE", "MOUVE", "VIOLET"]],
+  ["MULTI", ["MULTI"]],
+];
+
+function displayedColourFamily(product: Pick<ComparableProduct, "colour" | "colourFamily">) {
+  if (product.colourFamily) return product.colourFamily;
+  const sourceColour = product.colour.toUpperCase();
+  return colourFamilyFallbacks.find(([, names]) => names.some((name) => sourceColour.includes(name)))?.[0] ?? "Unmapped";
+}
+
+function hasSameColourFamily(
+  upcoming: Pick<ComparableProduct, "colour" | "colourFamily">,
+  historical: Pick<ComparableProduct, "colour" | "colourFamily">,
+) {
+  const upcomingFamily = displayedColourFamily(upcoming);
+  return upcomingFamily !== "Unmapped" && upcomingFamily === displayedColourFamily(historical);
+}
+
 const attributeValueReaders: Record<string, (item: ComparableProduct) => string> = {
   item: (product) => product.itemType,
   design: (product) => product.design,
@@ -315,7 +362,11 @@ function makeDecision(
   topK: number,
 ): Decision {
   const ranked = item.matches
-    .filter((match) => Boolean(historyById.get(match.historicalId)?.imageUrl))
+    .filter((match) => {
+      const historical = historyById.get(match.historicalId);
+      if (!historical?.imageUrl) return false;
+      return hasSameColourFamily(item, historical);
+    })
     .map((match) => {
       const visualAvailable = match.visualScore !== null;
       const denominator = visualAvailable
@@ -392,7 +443,12 @@ function makeDecision(
     targetSellThrough === Math.round(dataset.meta.model.targetSellThrough * 100) &&
     topK === dataset.meta.model.topK;
 
-  if (usesValidatedDefault) {
+  // A previous static artifact may predate the strict server-side family
+  // constraint. Never reuse its forecast if the display safety gate had to
+  // remove candidates; recalculate from the remaining same-family evidence.
+  const historicalVisualCandidates = item.matches.filter((match) => Boolean(historyById.get(match.historicalId)?.imageUrl));
+  const colourFamilyGuardChangedCandidates = ranked.length !== historicalVisualCandidates.length;
+  if (usesValidatedDefault && !colourFamilyGuardChangedCandidates) {
     return {
       ranked,
       quantity: item.recommendation.quantity,
@@ -504,7 +560,7 @@ function MatchAttributeCatalog({
           aria-expanded={expanded}
           onClick={() => setExpanded((current) => !current)}
         >
-          {expanded ? "Show key attributes" : `View all ${catalogAttributeOrder.length}`}
+          {expanded ? "Show less" : "Show all"}
         </button>
       </div>
       <dl className="catalog-attribute-grid">
@@ -517,6 +573,12 @@ function MatchAttributeCatalog({
             </div>
           );
         })}
+        {expanded && (
+          <div className="colour-family-attribute">
+            <dt>Colour family</dt>
+            <dd title={displayedColourFamily(product)}>{displayedColourFamily(product)}</dd>
+          </div>
+        )}
       </dl>
     </section>
   );
@@ -1149,7 +1211,7 @@ function App() {
                     </div>
                     <p>
                       {visualMatchingAvailable
-                        ? "The image score combines FashionSigLIP, DINOv2, masked garment colour and texture evidence; the overall score uses the selected attribute and visual weights."
+                        ? "The image score combines FashionSigLIP, multi-scale body DINOv2, masked garment colour and texture evidence; mismatched checks, stripes and prints are rejected before ranking. The overall score uses the selected attribute and visual weights."
                         : "Image scoring is disabled because the supplied filenames do not map to the SS27 identifiers; the overall score is attribute-only."}
                     </p>
                   </aside>
@@ -1265,7 +1327,7 @@ function App() {
             {[
               ["01", "Audit inputs", "Map both workbook schemas, remove constant or non-comparable fields, link images, and quarantine inconsistent outcome values."],
               ["02", "Retrieve visual analogues", dataset.meta.visionModel.reranker
-                ? `FashionSigLIP retrieves the top ${dataset.meta.visionModel.reranker.candidateCount} same-item candidates with ${dataset.meta.visionModel.reranker.candidateIndex?.engine ?? "exact vector search"}; DINOv2, garment-masked CIELAB colour, and texture rerank visual detail before structured evidence is combined.`
+                ? `FashionSigLIP retrieves the top ${dataset.meta.visionModel.reranker.candidateCount} same-item, same-design and same-colour-family candidates with ${dataset.meta.visionModel.reranker.candidateIndex?.engine ?? "exact vector search"}; multi-scale body DINOv2 gates mismatched patterns, then garment-masked CIELAB colour and texture rerank the eligible visual detail before structured evidence is combined.`
                 : `Create ${dataset.meta.attributeAudit.activeCount}-field structured evidence and compare mapped product images.`],
               ["03", "Learn retrieval", "Use a forward season holdout and parameter search to tune neighbour count, forecast blend, and regularization."],
               ["04", "Forecast unit sales", "Ensemble similarity-weighted historical sales with a trained, regularized machine-learning forecast."],

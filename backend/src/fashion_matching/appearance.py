@@ -1,11 +1,10 @@
 """Foreground-aware appearance signals for hybrid fashion retrieval.
 
-The catalogue does not yet carry pixel masks, so this module deliberately uses
-a conservative border-background segmenter rather than pretending every image
-has a perfect garment cut-out.  It only replaces the image background when the
-mask is credible; otherwise all encoders and descriptors fall back to the
-original image.  That makes the pipeline safe for editorial, modelled and
-non-studio catalogue photos while improving plain-background product shots.
+The preferred production path is a text-guided garment box followed by SAM 2
+segmentation. A conservative border-background mask remains as a secondary
+fallback for clean studio imagery. When neither mask passes its quality gate,
+colour and texture are deliberately unavailable rather than being calculated
+from the original background.
 """
 
 from __future__ import annotations
@@ -17,6 +16,9 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
+from fashion_matching.garment_segmentation import GarmentSegmenter
+from fashion_matching.taxonomy import colour_family
+
 COLOUR_BINS_PER_CHANNEL = 8
 COLOUR_DESCRIPTOR_DIMENSION = COLOUR_BINS_PER_CHANNEL**3
 TEXTURE_ORIENTATION_BINS = 8
@@ -24,6 +26,65 @@ TEXTURE_ENERGY_BINS = 8
 TEXTURE_DESCRIPTOR_DIMENSION = TEXTURE_ORIENTATION_BINS + TEXTURE_ENERGY_BINS
 _MASK_WORKING_SIDE = 384
 _WHITE_BACKGROUND = np.asarray([245, 245, 245], dtype=np.uint8)
+_GARMENT_CROP_MARGIN = 0.08
+
+# Preserve the source taxonomy while treating only clear spelling and plural
+# variants as equivalent. A generic print is deliberately not treated as a
+# digital, pigment, or discharge print.
+_RETRIEVAL_DESIGN_ALIASES = {
+    "PLAIN": "SOLID",
+    "PLAINS": "SOLID",
+    "SOLID": "SOLID",
+    "SOLIDS": "SOLID",
+    "PRINT": "PRINTS",
+    "PRINTS": "PRINTS",
+    "CHECK": "CHECKS",
+    "CHECKS": "CHECKS",
+    "STRIPE": "STRIPES",
+    "STRIPES": "STRIPES",
+    "PRINTS (PIGMENT)": "PIGMENT PRINT",
+}
+
+# These design families describe a visible repeat or surface construction where
+# a broad label alone is too coarse.  For example, both a micro-check shirt and
+# a large-windowpane shirt are `CHECKS` in the source data, but they must not
+# be treated as visual equivalents.  The gate below compares the garment body
+# at multiple scales before either item can become a final candidate.
+_PATTERN_GATED_DESIGNS = frozenset(
+    {
+        "CHECKS",
+        "STRIPES",
+        "PRINTS",
+        "DIGITAL PRINT",
+        "PIGMENT PRINT",
+        "DISCHARGE PRINT",
+        "PRINTS (DISCHARGE & PIGMENT)",
+        "DOBBY/STRUCTURE",
+        "WBC DOBBY",
+        "JACQUARD",
+        "EMBOSSED",
+        "HOUNDSTOOTH",
+    }
+)
+
+
+def canonical_retrieval_value(value: Any) -> str:
+    """Return a stable, non-empty value for strict retrieval constraints."""
+
+    return " ".join(str(value or "").upper().split())
+
+
+def canonical_retrieval_design(value: Any) -> str:
+    """Return the strict source-design key used before visual retrieval."""
+
+    design = canonical_retrieval_value(value)
+    return _RETRIEVAL_DESIGN_ALIASES.get(design, design)
+
+
+def requires_pattern_gate(value: Any) -> bool:
+    """Whether a source design needs fine body-pattern verification."""
+
+    return canonical_retrieval_design(value) in _PATTERN_GATED_DESIGNS
 
 
 @dataclass(frozen=True)
@@ -31,8 +92,8 @@ class AppearanceFeatures:
     """Masked appearance features plus audit information for one image."""
 
     image: Image.Image
-    colour_vector: np.ndarray
-    texture_vector: np.ndarray
+    colour_vector: np.ndarray | None
+    texture_vector: np.ndarray | None
     mask_coverage: float
     mask_confidence: float
     segmentation_method: str
@@ -168,6 +229,18 @@ def _foreground_mask(image: Image.Image) -> tuple[np.ndarray | None, float, str 
 
 def _masked_image(image: Image.Image, mask: np.ndarray) -> Image.Image:
     source = np.asarray(image, dtype=np.uint8)
+    row_indices, column_indices = np.where(mask)
+    if not len(row_indices) or not len(column_indices):
+        return image.copy()
+    top, bottom = int(row_indices.min()), int(row_indices.max()) + 1
+    left, right = int(column_indices.min()), int(column_indices.max()) + 1
+    margin = max(round(max(bottom - top, right - left) * _GARMENT_CROP_MARGIN), 2)
+    top = max(top - margin, 0)
+    bottom = min(bottom + margin, image.height)
+    left = max(left - margin, 0)
+    right = min(right + margin, image.width)
+    source = source[top:bottom, left:right]
+    mask = mask[top:bottom, left:right]
     composite = np.where(mask[..., np.newaxis], source, _WHITE_BACKGROUND)
     return Image.fromarray(composite.astype(np.uint8))
 
@@ -229,40 +302,107 @@ def _texture_descriptor(rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
 
 
 def extract_appearance_features(image: Image.Image, *, mask_enabled: bool = True) -> AppearanceFeatures:
-    """Mask a garment conservatively, then derive colour and texture signals."""
+    """Mask a garment and derive only foreground-backed appearance signals."""
+
+    return _extract_appearance_features(
+        image,
+        mask_enabled=mask_enabled,
+    )
+
+
+def _extract_appearance_features(
+    image: Image.Image,
+    *,
+    mask_enabled: bool,
+    item_type: str = "",
+    segmenter: GarmentSegmenter | None = None,
+    allow_border_fallback: bool = True,
+) -> AppearanceFeatures:
+    """Implementation shared by the simple API and the pipeline integration."""
 
     source = image.convert("RGB")
-    mask, confidence, reason = _foreground_mask(source) if mask_enabled else (None, 0.0, "masking_disabled")
+    mask: np.ndarray | None = None
+    confidence = 0.0
+    reason: str | None = "masking_disabled" if not mask_enabled else None
+    segmentation_method = "masking-disabled" if not mask_enabled else "fallback-original-image"
+    if mask_enabled and segmenter is not None:
+        semantic = segmenter.segment(source, item_type=item_type)
+        mask = semantic.mask
+        confidence = semantic.confidence
+        reason = semantic.fallback_reason
+        segmentation_method = semantic.method if mask is not None else "fallback-original-image"
+    if mask_enabled and mask is None and allow_border_fallback:
+        border_mask, border_confidence, border_reason = _foreground_mask(source)
+        if border_mask is not None:
+            mask = border_mask
+            confidence = border_confidence
+            reason = None
+            segmentation_method = "adaptive-lab-border-foreground-mask"
+        elif reason is None:
+            reason = border_reason
     if mask is None:
-        mask = np.ones((source.height, source.width), dtype=bool)
         prepared_image = source.copy()
-        segmentation_method = "fallback-original-image" if mask_enabled else "masking-disabled"
-        mask_coverage = 1.0
+        mask_coverage = 0.0
+        descriptor_mask = np.ones((source.height, source.width), dtype=bool) if not mask_enabled else None
     else:
         prepared_image = _masked_image(source, mask)
-        segmentation_method = "adaptive-lab-border-foreground-mask"
         mask_coverage = float(mask.mean())
-    descriptor_image = _working_image(source)
-    if descriptor_image.size == source.size:
         descriptor_mask = mask
-    else:
+    descriptor_image = _working_image(source)
+    if descriptor_mask is not None and descriptor_image.size != source.size:
         descriptor_mask = np.asarray(
-            Image.fromarray(mask.astype(np.uint8) * 255).resize(
+            Image.fromarray(descriptor_mask.astype(np.uint8) * 255).resize(
                 descriptor_image.size,
                 Image.Resampling.NEAREST,
             ),
             dtype=bool,
         )
     rgb = np.asarray(descriptor_image, dtype=np.uint8)
+    colour_vector = _colour_descriptor(rgb, descriptor_mask) if descriptor_mask is not None else None
+    texture_vector = _texture_descriptor(rgb, descriptor_mask) if descriptor_mask is not None else None
     return AppearanceFeatures(
         image=prepared_image,
-        colour_vector=_colour_descriptor(rgb, descriptor_mask),
-        texture_vector=_texture_descriptor(rgb, descriptor_mask),
+        colour_vector=colour_vector,
+        texture_vector=texture_vector,
         mask_coverage=round(mask_coverage, 4),
         mask_confidence=round(confidence, 4),
         segmentation_method=segmentation_method,
         fallback_reason=reason,
     )
+
+
+def extract_pipeline_appearance_features(
+    image: Image.Image,
+    *,
+    item_type: str,
+    mask_enabled: bool,
+    segmenter: GarmentSegmenter | None,
+    allow_border_fallback: bool,
+) -> AppearanceFeatures:
+    """Pipeline entry point with an optional production garment segmenter."""
+
+    return _extract_appearance_features(
+        image,
+        mask_enabled=mask_enabled,
+        item_type=item_type,
+        segmenter=segmenter,
+        allow_border_fallback=allow_border_fallback,
+    )
+
+
+def body_pattern_views(image: Image.Image) -> list[Image.Image]:
+    """Return large/medium/fine centre-body crops for pattern comparison."""
+
+    source = image.convert("RGB")
+    try:
+        views: list[Image.Image] = []
+        for fraction in (0.82, 0.66, 0.50):
+            width, height = max(2, round(source.width * fraction)), max(2, round(source.height * fraction))
+            left, top = (source.width - width) // 2, (source.height - height) // 2
+            views.append(source.crop((left, top, left + width, top + height)))
+        return views
+    finally:
+        source.close()
 
 
 class InnerProductIndex:
@@ -298,20 +438,64 @@ class InnerProductIndex:
 
 
 class FashionCandidateRetriever:
-    """Metadata-aware FashionSigLIP retrieval with global sparse-type fallback."""
+    """Metadata-aware FashionSigLIP retrieval with strict eligibility cohorts."""
 
     def __init__(self, candidates: list[dict[str, Any]], vectors: np.ndarray) -> None:
         if len(candidates) != len(vectors):
             raise ValueError("candidates and vectors must have the same length")
         self._global = InnerProductIndex(vectors)
-        groups: dict[str, list[int]] = defaultdict(list)
+        type_groups: dict[str, list[int]] = defaultdict(list)
+        design_groups: dict[str, list[int]] = defaultdict(list)
+        colour_groups: dict[str, list[int]] = defaultdict(list)
+        type_design_groups: dict[tuple[str, str], list[int]] = defaultdict(list)
+        type_colour_groups: dict[tuple[str, str], list[int]] = defaultdict(list)
+        design_colour_groups: dict[tuple[str, str], list[int]] = defaultdict(list)
+        type_design_colour_groups: dict[tuple[str, str, str], list[int]] = defaultdict(list)
         for index, item in enumerate(candidates):
-            item_type = " ".join(str(item.get("itemType") or "").upper().split())
+            item_type = canonical_retrieval_value(item.get("itemType"))
+            design = canonical_retrieval_design(item.get("design"))
+            colour = colour_family(item.get("colour"))
             if item_type:
-                groups[item_type].append(index)
+                type_groups[item_type].append(index)
+            if design:
+                design_groups[design].append(index)
+            if colour:
+                colour_groups[colour].append(index)
+            if item_type and design:
+                type_design_groups[(item_type, design)].append(index)
+            if item_type and colour:
+                type_colour_groups[(item_type, colour)].append(index)
+            if design and colour:
+                design_colour_groups[(design, colour)].append(index)
+            if item_type and design and colour:
+                type_design_colour_groups[(item_type, design, colour)].append(index)
         self._by_type = {
             item_type: (indices, InnerProductIndex(vectors[np.asarray(indices)]))
-            for item_type, indices in groups.items()
+            for item_type, indices in type_groups.items()
+        }
+        self._by_design = {
+            design: (indices, InnerProductIndex(vectors[np.asarray(indices)]))
+            for design, indices in design_groups.items()
+        }
+        self._by_type_and_design = {
+            key: (indices, InnerProductIndex(vectors[np.asarray(indices)]))
+            for key, indices in type_design_groups.items()
+        }
+        self._by_type_and_colour = {
+            key: (indices, InnerProductIndex(vectors[np.asarray(indices)]))
+            for key, indices in type_colour_groups.items()
+        }
+        self._by_design_and_colour = {
+            key: (indices, InnerProductIndex(vectors[np.asarray(indices)]))
+            for key, indices in design_colour_groups.items()
+        }
+        self._by_colour = {
+            colour: (indices, InnerProductIndex(vectors[np.asarray(indices)]))
+            for colour, indices in colour_groups.items()
+        }
+        self._by_type_and_design_and_colour = {
+            key: (indices, InnerProductIndex(vectors[np.asarray(indices)]))
+            for key, indices in type_design_colour_groups.items()
         }
         self.backend = self._global.backend
 
@@ -322,10 +506,36 @@ class FashionCandidateRetriever:
         limit: int,
         *,
         require_same_item_type: bool,
+        require_same_design: bool,
+        require_same_colour_family: bool,
     ) -> list[int]:
-        item_type = " ".join(str(query.get("itemType") or "").upper().split())
-        selected = self._by_type.get(item_type) if require_same_item_type and item_type else None
-        if selected is not None and len(selected[0]) >= 2:
+        item_type = canonical_retrieval_value(query.get("itemType"))
+        design = canonical_retrieval_design(query.get("design"))
+        colour = colour_family(query.get("colour"))
+        selected: tuple[list[int], InnerProductIndex] | None
+        if require_same_item_type and require_same_design and require_same_colour_family:
+            selected = (
+                self._by_type_and_design_and_colour.get((item_type, design, colour))
+                if item_type and design and colour
+                else None
+            )
+        elif require_same_item_type and require_same_design:
+            selected = self._by_type_and_design.get((item_type, design)) if item_type and design else None
+        elif require_same_item_type and require_same_colour_family:
+            selected = self._by_type_and_colour.get((item_type, colour)) if item_type and colour else None
+        elif require_same_design and require_same_colour_family:
+            selected = self._by_design_and_colour.get((design, colour)) if design and colour else None
+        elif require_same_item_type:
+            selected = self._by_type.get(item_type) if item_type else None
+        elif require_same_design:
+            selected = self._by_design.get(design) if design else None
+        elif require_same_colour_family:
+            selected = self._by_colour.get(colour) if colour else None
+        else:
+            return self._global.search(vector, limit)
+        if selected is not None:
             source_indices, index = selected
             return [source_indices[position] for position in index.search(vector, limit)]
-        return self._global.search(vector, limit)
+        # A required attribute with no eligible history is a true no-match,
+        # never a reason to fall back to another item type or design.
+        return []

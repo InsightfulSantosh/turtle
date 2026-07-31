@@ -17,10 +17,13 @@ from fashion_matching.appearance import (
     COLOUR_DESCRIPTOR_DIMENSION,
     TEXTURE_DESCRIPTOR_DIMENSION,
     FashionCandidateRetriever,
+    body_pattern_views,
     cosine_distance,
-    extract_appearance_features,
+    extract_pipeline_appearance_features,
+    requires_pattern_gate,
 )
 from fashion_matching.encoders import FashionEncoder, ImageEncoder
+from fashion_matching.garment_segmentation import GarmentSegmenter
 from fashion_matching.models import ManifestRecord
 from fashion_matching.preprocessing import ImagePreprocessor, ImageValidationError
 
@@ -32,8 +35,11 @@ class CatalogueVisualEmbeddings:
     identifiers: list[str]
     fashion: np.ndarray
     detail: np.ndarray | None
+    pattern: np.ndarray | None
     colour: np.ndarray
     texture: np.ndarray
+    colour_available: list[bool]
+    texture_available: list[bool]
     mask_coverages: list[float]
     mask_confidences: list[float]
     segmentation_methods: list[str]
@@ -49,6 +55,8 @@ def _encode_catalog(
     reranker: ImageEncoder | None,
     preprocessor: ImagePreprocessor,
     appearance_mask_enabled: bool,
+    garment_segmenter: GarmentSegmenter | None,
+    allow_border_mask_fallback: bool,
     batch_size: int,
 ) -> CatalogueVisualEmbeddings:
     """Encode each usable catalogue image once for every enabled visual stage."""
@@ -64,8 +72,9 @@ def _encode_catalog(
     paths = list(path_to_items)
     fashion_vectors_by_path: dict[Path, np.ndarray] = {}
     detail_vectors_by_path: dict[Path, np.ndarray] = {}
-    colour_vectors_by_path: dict[Path, np.ndarray] = {}
-    texture_vectors_by_path: dict[Path, np.ndarray] = {}
+    pattern_vectors_by_path: dict[Path, np.ndarray] = {}
+    colour_vectors_by_path: dict[Path, np.ndarray | None] = {}
+    texture_vectors_by_path: dict[Path, np.ndarray | None] = {}
     mask_metadata_by_path: dict[Path, tuple[float, float, str, str | None]] = {}
     for offset in range(0, len(paths), batch_size):
         batch_paths = paths[offset : offset + batch_size]
@@ -84,9 +93,13 @@ def _encode_catalog(
             except ImageValidationError as exc:
                 LOGGER.warning("Skipping invalid product image %s: %s", image_path, exc)
                 continue
-            appearance = extract_appearance_features(
+            item_type = str(path_to_items[image_path][0].get("itemType") or "")
+            appearance = extract_pipeline_appearance_features(
                 prepared.image,
+                item_type=item_type,
                 mask_enabled=appearance_mask_enabled,
+                segmenter=garment_segmenter,
+                allow_border_fallback=allow_border_mask_fallback,
             )
             prepared_paths.append(image_path)
             prepared_images.append(appearance.image)
@@ -105,6 +118,14 @@ def _encode_catalog(
         try:
             fashion_vectors = encoder.encode_images(prepared_images)
             detail_vectors = reranker.encode_images(prepared_images) if reranker else None
+            pattern_images = (
+                [view for image in prepared_images for view in body_pattern_views(image)] if reranker else []
+            )
+            try:
+                pattern_vectors = reranker.encode_images(pattern_images) if reranker else None
+            finally:
+                for image in pattern_images:
+                    image.close()
         finally:
             for image in prepared_images:
                 image.close()
@@ -114,10 +135,14 @@ def _encode_catalog(
             raise RuntimeError("Fashion candidate encoder returned a different number of vectors")
         if detail_vectors is not None and len(detail_vectors) != len(prepared_paths):
             raise RuntimeError("DINOv2 reranker returned a different number of vectors")
+        if pattern_vectors is not None and len(pattern_vectors) != len(prepared_paths) * 3:
+            raise RuntimeError("DINOv2 body-pattern encoder returned a different number of vectors")
         for index, image_path in enumerate(prepared_paths):
             fashion_vectors_by_path[image_path] = np.asarray(fashion_vectors[index], dtype=np.float32)
             if detail_vectors is not None:
                 detail_vectors_by_path[image_path] = np.asarray(detail_vectors[index], dtype=np.float32)
+                combined = np.concatenate(pattern_vectors[index * 3 : (index + 1) * 3]).astype(np.float32)
+                pattern_vectors_by_path[image_path] = combined / max(float(np.linalg.norm(combined)), 1e-12)
         LOGGER.info(
             "Encoded %s/%s unique images from %s",
             min(offset + batch_size, len(paths)),
@@ -128,8 +153,11 @@ def _encode_catalog(
     identifiers: list[str] = []
     fashion_vectors: list[np.ndarray] = []
     detail_vectors: list[np.ndarray] = []
+    pattern_vectors: list[np.ndarray] = []
     colour_vectors: list[np.ndarray] = []
     texture_vectors: list[np.ndarray] = []
+    colour_available: list[bool] = []
+    texture_available: list[bool] = []
     mask_coverages: list[float] = []
     mask_confidences: list[float] = []
     segmentation_methods: list[str] = []
@@ -137,29 +165,36 @@ def _encode_catalog(
     for image_path, catalog_items in path_to_items.items():
         fashion_vector = fashion_vectors_by_path.get(image_path)
         detail_vector = detail_vectors_by_path.get(image_path) if reranker else None
+        pattern_vector = pattern_vectors_by_path.get(image_path) if reranker else None
         colour_vector = colour_vectors_by_path.get(image_path)
         texture_vector = texture_vectors_by_path.get(image_path)
         metadata = mask_metadata_by_path.get(image_path)
-        if (
-            fashion_vector is None
-            or colour_vector is None
-            or texture_vector is None
-            or metadata is None
-            or (reranker is not None and detail_vector is None)
-        ):
+        missing_reranker_vector = reranker is not None and (detail_vector is None or pattern_vector is None)
+        if fashion_vector is None or metadata is None or missing_reranker_vector:
             continue
         for item in catalog_items:
             item["hasVisualFeature"] = True
             identifiers.append(str(item["id"]))
             fashion_vectors.append(fashion_vector)
-            colour_vectors.append(colour_vector)
-            texture_vectors.append(texture_vector)
+            colour_available.append(colour_vector is not None)
+            texture_available.append(texture_vector is not None)
+            colour_vectors.append(
+                colour_vector
+                if colour_vector is not None
+                else np.zeros(COLOUR_DESCRIPTOR_DIMENSION, dtype=np.float32)
+            )
+            texture_vectors.append(
+                texture_vector
+                if texture_vector is not None
+                else np.zeros(TEXTURE_DESCRIPTOR_DIMENSION, dtype=np.float32)
+            )
             mask_coverages.append(metadata[0])
             mask_confidences.append(metadata[1])
             segmentation_methods.append(metadata[2])
             fallback_reasons.append(metadata[3])
             if detail_vector is not None:
                 detail_vectors.append(detail_vector)
+                pattern_vectors.append(pattern_vector)
     if not fashion_vectors:
         empty_fashion = np.empty((0, int(encoder.dimension)), dtype=np.float32)
         empty_detail = np.empty((0, int(reranker.dimension)), dtype=np.float32) if reranker is not None else None
@@ -167,8 +202,15 @@ def _encode_catalog(
             identifiers=identifiers,
             fashion=empty_fashion,
             detail=empty_detail,
+            pattern=(
+                np.empty((0, int(reranker.dimension) * 3), dtype=np.float32)
+                if reranker is not None
+                else None
+            ),
             colour=np.empty((0, COLOUR_DESCRIPTOR_DIMENSION), dtype=np.float32),
             texture=np.empty((0, TEXTURE_DESCRIPTOR_DIMENSION), dtype=np.float32),
+            colour_available=[],
+            texture_available=[],
             mask_coverages=[],
             mask_confidences=[],
             segmentation_methods=[],
@@ -178,8 +220,11 @@ def _encode_catalog(
         identifiers=identifiers,
         fashion=np.stack(fashion_vectors),
         detail=np.stack(detail_vectors) if reranker is not None else None,
+        pattern=np.stack(pattern_vectors) if reranker is not None else None,
         colour=np.stack(colour_vectors),
         texture=np.stack(texture_vectors),
+        colour_available=colour_available,
+        texture_available=texture_available,
         mask_coverages=mask_coverages,
         mask_confidences=mask_confidences,
         segmentation_methods=segmentation_methods,
@@ -216,13 +261,23 @@ def _two_stage_candidate_rows(
     right_fashion_vectors: np.ndarray,
     left_detail_vectors: np.ndarray,
     right_detail_vectors: np.ndarray,
+    left_pattern_vectors: np.ndarray,
+    right_pattern_vectors: np.ndarray,
     left_colour_vectors: np.ndarray,
     right_colour_vectors: np.ndarray,
     left_texture_vectors: np.ndarray,
     right_texture_vectors: np.ndarray,
+    left_colour_available: list[bool],
+    right_colour_available: list[bool],
+    left_texture_available: list[bool],
+    right_texture_available: list[bool],
     *,
     candidate_count: int,
     require_same_item_type: bool,
+    require_same_design: bool,
+    require_same_colour_family: bool,
+    pattern_gate_enabled: bool,
+    pattern_max_distance: float,
 ) -> tuple[list[dict[str, str | float | int]], str]:
     """Use FAISS (when available) to retrieve FashionSigLIP candidates once."""
 
@@ -234,8 +289,11 @@ def _two_stage_candidate_rows(
             left_fashion_vectors[left_index],
             candidate_count,
             require_same_item_type=require_same_item_type,
+            require_same_design=require_same_design,
+            require_same_colour_family=require_same_colour_family,
         )
-        for rank, right_index in enumerate(candidate_indices, start=1):
+        accepted_rank = 0
+        for retrieval_rank, right_index in enumerate(candidate_indices, start=1):
             fashion_distance = float(
                 np.clip(
                     1.0 - left_fashion_vectors[left_index] @ right_fashion_vectors[right_index],
@@ -243,30 +301,57 @@ def _two_stage_candidate_rows(
                     2.0,
                 )
             )
-            detail_distance = float(
+            global_dino_distance = float(
                 np.clip(
                     1.0 - left_detail_vectors[left_index] @ right_detail_vectors[right_index],
                     0.0,
                     2.0,
                 )
             )
-            colour_distance = cosine_distance(
-                left_colour_vectors[left_index],
-                right_colour_vectors[right_index],
+            pattern_distance = float(
+                np.clip(
+                    1.0 - left_pattern_vectors[left_index] @ right_pattern_vectors[right_index],
+                    0.0,
+                    2.0,
+                )
             )
-            texture_distance = cosine_distance(
-                left_texture_vectors[left_index],
-                right_texture_vectors[right_index],
+            pattern_gated = requires_pattern_gate(left_item.get("design")) and requires_pattern_gate(
+                right_items[right_index].get("design")
             )
+            if pattern_gate_enabled and pattern_gated and pattern_distance > pattern_max_distance:
+                continue
+            colour_distance = (
+                cosine_distance(
+                    left_colour_vectors[left_index],
+                    right_colour_vectors[right_index],
+                )
+                if left_colour_available[left_index] and right_colour_available[right_index]
+                else None
+            )
+            texture_distance = (
+                cosine_distance(
+                    left_texture_vectors[left_index],
+                    right_texture_vectors[right_index],
+                )
+                if left_texture_available[left_index] and right_texture_available[right_index]
+                else None
+            )
+            accepted_rank += 1
             rows.append(
                 {
                     "leftId": left_ids[left_index],
                     "rightId": right_ids[right_index],
                     "fashionDistance": round(fashion_distance, 7),
-                    "dinoDistance": round(detail_distance, 7),
-                    "colourDistance": round(colour_distance, 7),
-                    "textureDistance": round(texture_distance, 7),
-                    "candidateRank": rank,
+                    # This is the DINO signal used for scoring: a three-scale
+                    # body-only pattern/structure representation.  Retain the
+                    # old whole-image DINO distance solely for audit analysis.
+                    "dinoDistance": round(pattern_distance, 7),
+                    "globalDinoDistance": round(global_dino_distance, 7),
+                    "patternDistance": round(pattern_distance, 7),
+                    "colourDistance": round(colour_distance, 7) if colour_distance is not None else None,
+                    "textureDistance": round(texture_distance, 7) if texture_distance is not None else None,
+                    "candidateRank": accepted_rank,
+                    "retrievalRank": retrieval_rank,
                 }
             )
     return rows, retriever.backend
@@ -280,9 +365,15 @@ def build_artifact_vision_output(
     preprocessor: ImagePreprocessor,
     reranker: ImageEncoder | None = None,
     candidate_count: int = 50,
-    reranker_weight_grid: tuple[float, ...] = (0.0, 0.25, 0.5, 0.75, 1.0),
+    reranker_weight_grid: tuple[float, ...] = (0.5833333333,),
     require_same_item_type: bool = True,
+    require_same_design: bool = True,
+    require_same_colour_family: bool = True,
+    pattern_gate_enabled: bool = True,
+    pattern_max_distance: float = 0.42,
     appearance_mask_enabled: bool = True,
+    garment_segmenter: GarmentSegmenter | None = None,
+    allow_border_mask_fallback: bool = True,
     appearance_weights: dict[str, float] | None = None,
     batch_size: int = 16,
 ) -> dict[str, Any]:
@@ -292,9 +383,11 @@ def build_artifact_vision_output(
         raise ValueError("candidate_count must be positive")
     if not reranker_weight_grid or any(not 0 <= weight <= 1 for weight in reranker_weight_grid):
         raise ValueError("reranker_weight_grid values must be between 0 and 1")
+    if not 0.0 <= pattern_max_distance <= 2.0:
+        raise ValueError("pattern_max_distance must be between 0 and 2")
     resolved_appearance_weights = {
-        "neural": 0.70,
-        "colour": 0.20,
+        "neural": 0.60,
+        "colour": 0.30,
         "texture": 0.10,
         **(appearance_weights or {}),
     }
@@ -313,6 +406,8 @@ def build_artifact_vision_output(
         reranker=reranker,
         preprocessor=preprocessor,
         appearance_mask_enabled=appearance_mask_enabled,
+        garment_segmenter=garment_segmenter,
+        allow_border_mask_fallback=allow_border_mask_fallback,
         batch_size=batch_size,
     )
     upcoming = _encode_catalog(
@@ -323,6 +418,8 @@ def build_artifact_vision_output(
         reranker=reranker,
         preprocessor=preprocessor,
         appearance_mask_enabled=appearance_mask_enabled,
+        garment_segmenter=garment_segmenter,
+        allow_border_mask_fallback=allow_border_mask_fallback,
         batch_size=batch_size,
     )
     if reranker is None:
@@ -357,6 +454,8 @@ def build_artifact_vision_output(
 
     assert historical.detail is not None
     assert upcoming.detail is not None
+    assert historical.pattern is not None
+    assert upcoming.pattern is not None
     historical_by_id = {str(item["id"]): item for item in source["historical"]}
     upcoming_by_id = {str(item["id"]): item for item in source["upcoming"]}
     historical_items = [historical_by_id[identifier] for identifier in historical.identifiers]
@@ -370,12 +469,22 @@ def build_artifact_vision_output(
         historical.fashion,
         historical.detail,
         historical.detail,
+        historical.pattern,
+        historical.pattern,
         historical.colour,
         historical.colour,
         historical.texture,
         historical.texture,
+        historical.colour_available,
+        historical.colour_available,
+        historical.texture_available,
+        historical.texture_available,
         candidate_count=candidate_count,
         require_same_item_type=require_same_item_type,
+        require_same_design=require_same_design,
+        require_same_colour_family=require_same_colour_family,
+        pattern_gate_enabled=pattern_gate_enabled,
+        pattern_max_distance=pattern_max_distance,
     )
     upcoming_pairs, upcoming_index_backend = _two_stage_candidate_rows(
         upcoming_items,
@@ -386,34 +495,52 @@ def build_artifact_vision_output(
         historical.fashion,
         upcoming.detail,
         historical.detail,
+        upcoming.pattern,
+        historical.pattern,
         upcoming.colour,
         historical.colour,
         upcoming.texture,
         historical.texture,
+        upcoming.colour_available,
+        historical.colour_available,
+        upcoming.texture_available,
+        historical.texture_available,
         candidate_count=candidate_count,
         require_same_item_type=require_same_item_type,
+        require_same_design=require_same_design,
+        require_same_colour_family=require_same_colour_family,
+        pattern_gate_enabled=pattern_gate_enabled,
+        pattern_max_distance=pattern_max_distance,
     )
     candidate_pairs = historical_pairs + upcoming_pairs
     mask_coverages = historical.mask_coverages + upcoming.mask_coverages
     mask_confidences = historical.mask_confidences + upcoming.mask_confidences
     segmentation_methods = historical.segmentation_methods + upcoming.segmentation_methods
+    appearance_available = historical.colour_available + upcoming.colour_available
     accepted_mask_coverages = [
         coverage
-        for coverage, method in zip(mask_coverages, segmentation_methods, strict=True)
-        if method == "adaptive-lab-border-foreground-mask"
+        for coverage, available in zip(mask_coverages, appearance_available, strict=True)
+        if available
     ]
     accepted_mask_confidences = [
         confidence
-        for confidence, method in zip(mask_confidences, segmentation_methods, strict=True)
-        if method == "adaptive-lab-border-foreground-mask"
+        for confidence, available in zip(mask_confidences, appearance_available, strict=True)
+        if available
     ]
     fallback_counts = Counter(
         reason for reason in historical.fallback_reasons + upcoming.fallback_reasons if reason is not None
     )
+    semantic_masked = sum(method == "grounding-dino-sam2" for method in segmentation_methods)
+    border_masked = sum(method == "adaptive-lab-border-foreground-mask" for method in segmentation_methods)
+    segmentation_metadata = (
+        garment_segmenter.metadata()
+        if garment_segmenter is not None
+        else {"method": "adaptive-lab-border-foreground-mask"}
+    )
     return {
         "engine": (
-            "Two-stage FashionSigLIP candidate retrieval with DINOv2, masked CIELAB colour "
-            "and texture visual-detail reranking"
+            "Two-stage FashionSigLIP candidate retrieval with multi-scale body DINOv2, Grounding DINO + SAM 2 "
+            "garment masking, masked CIELAB colour and texture visual-detail reranking"
         ),
         "modelId": encoder.model_id,
         "modelRevision": encoder.revision,
@@ -429,6 +556,15 @@ def build_artifact_vision_output(
             "candidateCount": candidate_count,
             "weightGrid": list(reranker_weight_grid),
             "sameItemTypeConstraint": require_same_item_type,
+            "sameDesignConstraint": require_same_design,
+            "sameColourFamilyConstraint": require_same_colour_family,
+            "patternGate": {
+                "enabled": pattern_gate_enabled,
+                "method": "three-scale-centre-garment-body-DINOv2",
+                "designs": "checks, stripes, prints, structured fabrics",
+                "maximumDistance": pattern_max_distance,
+                "policy": "exclude candidate when the body-pattern distance exceeds the limit",
+            },
             "candidateIndex": {
                 "engine": (
                     historical_index_backend
@@ -441,12 +577,20 @@ def build_artifact_vision_output(
             "appearance": {
                 "segmentation": {
                     "enabled": appearance_mask_enabled,
-                    "method": "adaptive-lab-border-foreground-mask",
-                    "maskedImages": sum(
-                        method == "adaptive-lab-border-foreground-mask" for method in segmentation_methods
+                    "method": (
+                        "grounding-dino-sam2-with-adaptive-background-fallback"
+                        if garment_segmenter is not None
+                        else "adaptive-lab-border-foreground-mask"
                     ),
+                    "model": segmentation_metadata,
+                    "maskedImages": sum(appearance_available),
+                    "semanticMaskedImages": semantic_masked,
+                    "borderFallbackMaskedImages": border_masked,
+                    "unavailableAppearanceImages": len(appearance_available) - sum(appearance_available),
                     "fallbackImages": sum(fallback_counts.values()),
                     "fallbackReasons": dict(sorted(fallback_counts.items())),
+                    "maskRequiredForColourAndTexture": True,
+                    "unmaskedNeuralFallback": "original-image-for-FashionSigLIP-and-DINOv2-only",
                     "meanForegroundCoverage": (
                         round(float(np.mean(accepted_mask_coverages)), 4) if accepted_mask_coverages else 0.0
                     ),
@@ -467,7 +611,7 @@ def build_artifact_vision_output(
             },
         },
         "calibrationMethod": (
-            "Separate robust logistic calibration for FashionSigLIP, DINOv2, masked CIELAB "
+                "Separate robust logistic calibration for FashionSigLIP, multi-scale body DINOv2, masked CIELAB "
             "colour and texture candidate distances; component weights are configured explicitly"
         ),
         "candidatePairs": candidate_pairs,
