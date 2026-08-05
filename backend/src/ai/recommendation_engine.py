@@ -71,6 +71,9 @@ class RecommendationRuntime:
             "productId": item["id"],
             "modelVersion": self.model["version"],
             "recommendation": result,
-            "matches": matches[:3],
+            # Keep the API response aligned with the model/UI review policy:
+            # show the top four visual analogues, while recommend_one still
+            # uses only the single accepted top analogue for the order.
+            "matches": matches[:4],
             "warnings": warnings,
         }

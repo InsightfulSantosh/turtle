@@ -1543,19 +1543,30 @@ select {
   z-index: 2;
 }
 
-.match-image {
-  aspect-ratio: auto;
+.match-image-frame {
+  /* This is a real layout frame rather than relying on an image's intrinsic
+     dimensions. It keeps all card detail panels on the same baseline. */
+  aspect-ratio: 2 / 3;
   background: var(--white);
   display: block;
-  height: auto;
-  object-fit: contain;
-  object-position: center;
+  overflow: hidden;
+  position: relative;
   width: 100%;
 }
 
-.image-fallback.match-image {
-  aspect-ratio: 2 / 3;
-  height: auto;
+.match-image-frame .match-image {
+  display: block;
+  height: 100%;
+  object-fit: contain;
+  object-position: center bottom;
+  width: 100%;
+}
+
+.match-image-frame .image-fallback.match-image {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .match-copy {
@@ -2971,8 +2982,8 @@ select {
     align-items: flex-start;
   }
 
-  .match-image {
-    height: auto;
+  .match-image-frame {
+    aspect-ratio: 2 / 3;
   }
 
   .workbook-audit-heading {

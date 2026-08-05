@@ -982,7 +982,9 @@ function App() {
                           onClick={() => chooseAnalogue(match.historicalId)}
                         >
                           <span className="rank">#{index + 1}</span>
-                          <ProductImage src={historical.imageUrl} alt={historical.id} className="match-image" />
+                          <div className="match-image-frame">
+                            <ProductImage src={historical.imageUrl} alt={historical.id} className="match-image" />
+                          </div>
                           <div className="match-copy">
                             <div className="match-title"><strong>{historical.id}</strong><span>{scorePercent(match.combinedScore)}</span></div>
                             {Math.round(match.combinedScore * 100) < Math.round(minimumSimilarity * 100) && <small className="threshold-note">Below current similarity criterion</small>}
