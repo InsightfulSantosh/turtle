@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import os
+from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,8 +39,8 @@ class PipelineRunSummary:
     historical_items: int
     upcoming_items: int
     model_version: str
-    selection_method: str
-    backtest_wape: float
+    evidence_policy: str
+    accepted_matches: int
 
 
 class RealDataPipeline:
@@ -50,9 +52,12 @@ class RealDataPipeline:
 
     def build_source(self) -> dict[str, Any]:
         ingested = self.ingestor.ingest()
+        historical_input = self._normalize_historical_source_layout(
+            ingested.historical_rows
+        )
         historical_rows, historical_report = preprocess_rows(
             "Historical",
-            ingested.historical_rows,
+            historical_input,
             "CON",
         )
         # Support the current SS27 master layout, which provides the product
@@ -126,15 +131,52 @@ class RealDataPipeline:
             "upcoming": features.upcoming,
         }
 
+    @staticmethod
+    def _normalize_historical_source_layout(
+        rows: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Map the current historical workbook headers to the legacy source schema.
+
+        The latest workbook uses the same catalogue-oriented headers as the SS27
+        master. Keeping this small compatibility layer allows the pipeline to
+        accept both supplied historical layouts without weakening schema checks.
+        """
+
+        if not rows or "IMAGE ID" not in rows[0]:
+            return rows
+
+        renamed_columns = {
+            "IMAGE ID": "CON",
+            "SEGMENT1": "ITEM TYPE",
+            "SEGMENT2": "SORT",
+            "SEGMENT3": "COLOR",
+            "COLOR_NAME": "COLOR__2",
+            "SELL THROUGH": "SELL THR",
+            "WEEKLY SELL THROUGH": "WKLY SELL THRU",
+        }
+        normalized_rows: list[dict[str, Any]] = []
+        for row in rows:
+            normalized = dict(row)
+            for source, target in renamed_columns.items():
+                normalized[target] = normalized.pop(source)
+            normalized_rows.append(normalized)
+        return normalized_rows
+
     def run(
         self,
         vision_builder: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
         *,
         item_type: str | None = None,
+        sample_size: int | None = None,
+        sample_seed: int = 27,
     ) -> PipelineRunSummary:
         source = self.build_source()
+        if item_type is not None and sample_size is not None:
+            raise ValueError("item_type and sample_size cannot be used together")
         if item_type is not None:
             source = self._restrict_source_to_item_type(source, item_type)
+        if sample_size is not None:
+            source = self._sample_upcoming_catalogue(source, sample_size, sample_seed)
         vision_output = vision_builder(source) if vision_builder is not None else self._vision_metadata(source)
         artifact = build_model_artifact(source, vision_output)
         self._write_artifact(artifact)
@@ -144,8 +186,11 @@ class RealDataPipeline:
             historical_items=len(artifact["historical"]),
             upcoming_items=len(artifact["upcoming"]),
             model_version=str(model["version"]),
-            selection_method=str(model["modelSelection"]),
-            backtest_wape=float(model["backtest"]["wape"]),
+            evidence_policy=str(model["evidencePolicy"]),
+            accepted_matches=sum(
+                not item["recommendation"]["noSuitableMatch"]
+                for item in artifact["upcoming"]
+            ),
         )
 
     @staticmethod
@@ -188,6 +233,139 @@ class RealDataPipeline:
             }
         )
         return {"meta": meta, "historical": historical, "upcoming": upcoming}
+
+    @staticmethod
+    def _sample_upcoming_catalogue(
+        source: dict[str, Any],
+        sample_size: int,
+        sample_seed: int = 27,
+    ) -> dict[str, Any]:
+        """Select a deterministic, category-balanced catalogue preview.
+
+        The historical catalogue remains complete so preview products are matched
+        against the same evidence pool that will be used by the production build.
+        """
+
+        upcoming = source["upcoming"]
+        if sample_size <= 0:
+            raise ValueError("sample_size must be greater than zero")
+        if sample_size > len(upcoming):
+            raise ValueError(
+                f"sample_size {sample_size} exceeds the {len(upcoming)} upcoming products"
+            )
+
+        strata: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
+        for item in upcoming:
+            key = (
+                str(item.get("itemType") or "UNSPECIFIED"),
+                str(item.get("categoryType") or "UNSPECIFIED"),
+            )
+            strata[key].append(item)
+        if sample_size < len(strata):
+            raise ValueError(
+                f"sample_size {sample_size} cannot cover all {len(strata)} "
+                "item-type/category strata"
+            )
+
+        def balanced_allocation(
+            capacities: dict[Any, int], total: int
+        ) -> dict[Any, int]:
+            """Round-robin allocation keeps small catalogue groups visible."""
+
+            allocation = {key: 1 for key in capacities}
+            remaining = total - len(allocation)
+            while remaining:
+                available = [
+                    key
+                    for key in sorted(capacities)
+                    if allocation[key] < capacities[key]
+                ]
+                if not available:
+                    raise ValueError("Not enough catalogue products for requested sample")
+                for key in available:
+                    if remaining == 0:
+                        break
+                    allocation[key] += 1
+                    remaining -= 1
+            return allocation
+
+        item_capacities: dict[str, int] = defaultdict(int)
+        for (item_type, _), items in strata.items():
+            item_capacities[item_type] += len(items)
+        item_allocations = balanced_allocation(dict(item_capacities), sample_size)
+
+        allocations: dict[tuple[str, str], int] = {}
+        for item_type in sorted(item_allocations):
+            category_capacities = {
+                key: len(items)
+                for key, items in strata.items()
+                if key[0] == item_type
+            }
+            allocations.update(
+                balanced_allocation(
+                    category_capacities,
+                    item_allocations[item_type],
+                )
+            )
+
+        selected: list[dict[str, Any]] = []
+        for key in sorted(strata):
+            ranked = sorted(
+                strata[key],
+                key=lambda item: hashlib.sha256(
+                    f"{sample_seed}:{item['id']}".encode("utf-8")
+                ).hexdigest(),
+            )
+            selected.extend(ranked[: allocations[key]])
+        selected.sort(key=lambda item: (item["itemType"], item["categoryType"], item["id"]))
+
+        meta = dict(source["meta"])
+        full_upcoming_count = len(upcoming)
+        full_upcoming_coverage = int(meta.get("upcomingImageCoverage", 0))
+        sample_coverage = sum(bool(item.get("imageUrl")) for item in selected)
+        stratum_counts = [
+            {
+                "itemType": key[0],
+                "categoryType": key[1],
+                "sampleItems": allocations[key],
+                "fullItems": len(strata[key]),
+            }
+            for key in sorted(strata)
+        ]
+        meta.update(
+            {
+                "upcomingItems": len(selected),
+                "upcomingImageCoverage": sample_coverage,
+                "missingUpcomingImages": [
+                    item["id"] for item in selected if not item.get("imageUrl")
+                ],
+                "imageMappingStatus": (
+                    f"Preview mapped {sample_coverage} of {len(selected)} sampled upcoming "
+                    f"images; full SS27 catalogue coverage is {full_upcoming_coverage} "
+                    f"of {full_upcoming_count}."
+                ),
+                "previewSample": True,
+                "previewSampleSize": len(selected),
+                "previewSampleSeed": sample_seed,
+                "previewSamplingMethod": (
+                    "Deterministic balanced stratification by itemType, then categoryType"
+                ),
+                "fullUpcomingItems": full_upcoming_count,
+                "fullUpcomingImageCoverage": full_upcoming_coverage,
+                "previewStrata": stratum_counts,
+                "artifactScope": {
+                    "mode": "preview",
+                    "historicalItems": len(source["historical"]),
+                    "upcomingItems": len(selected),
+                    "fullUpcomingItems": full_upcoming_count,
+                },
+            }
+        )
+        return {
+            "meta": meta,
+            "historical": source["historical"],
+            "upcoming": selected,
+        }
 
     def _write_artifact(self, artifact: dict[str, Any]) -> None:
         output = self.settings.output_path

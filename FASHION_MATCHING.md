@@ -36,29 +36,27 @@ For the real-data planner artifact, the production visual path is two-stage:
 
 ```text
 Input product image
-  -> item-type prompt drives Grounding DINO garment detection
-  -> SAM 2.1 traces the detected garment and a quality gate accepts or rejects the mask
-  -> clean-background border masking is an audited secondary fallback only
-  -> accepted garment masks are white-background composited and cropped with an 8% safety margin
-  -> source item type, design and canonical colour family form strict eligibility cohorts
-  -> FashionSigLIP embedding retrieves the top 50 eligible candidates through FAISS
-  -> body-only DINOv2 evaluates 82%, 66% and 50% centre crops for pattern scale and construction
-  -> a pattern gate excludes mismatched checks, stripes, prints and structured fabrics before ranking
-  -> masked CIELAB histogram measures garment colour without background pixels
-  -> masked texture descriptor adds surface/print evidence
-  -> calibrated weighted reranker combines FashionSigLIP (25%), body-DINOv2 (35%), colour (30%) and texture (10%) evidence
-  -> structured attributes and the hybrid visual score rank the final analogue set
+  -> source item type forms the strict eligibility cohort
+  -> FashionSigLIP retrieves the top 50 eligible candidates through FAISS
+  -> four dominant garment colours are extracted from the central foreground region
+  -> CIEDE2000 perceptual distance rejects visually different palettes
+  -> multi-scale DINOv2 verifies visible pattern and construction
+  -> a pattern gate excludes mismatched checks, stripes, prints and structured fabrics
+  -> texture evidence captures surface and print detail
+  -> the visual reranker combines neural, colour-palette and texture evidence
 ```
 
-Item type, source design and canonical colour family are strict constraints: a
-product with no eligible historical cohort receives no visual analogue instead
-of falling back to a different type, design or colour family. Only clear
-source-taxonomy equivalents are aligned
-(`PLAIN`/`PLAINS`/`SOLID`, singular/plural checks and stripes, and the pigment-print
-spelling variant). If neither SAM 2 nor the clean-background fallback produces a credible mask, colour and texture are explicitly unavailable
-for that pair; they are never calculated from the original image background.
-FashionSigLIP and DINOv2 may still use the original image as neural-only
-fallback so an imperfect catalogue photo does not disappear from retrieval.
+Item type is the only workbook field used as a strict retrieval constraint.
+Workbook colour labels do not create cohorts or influence visual ranking. Colour
+matching comes from the product images themselves using dominant palettes in
+CIELAB space and CIEDE2000 distance. The displayed source image is never masked
+or altered; foreground suppression is used only inside the colour measurement.
+OTTR uses an audited waist-to-lower-leg trouser region for FashionSigLIP,
+DINO, palette and texture analysis so shirts, shoes, logos and swatches do not
+dominate the measurement. For OTTR only, the hard pattern gate applies to
+Checks, Prints, Stripes and Dobby/Structure; plain trousers retain DINO evidence
+in ranking but are not rejected solely by the pattern-distance gate. All other
+item types keep the standard full-image visual path and gate behavior.
 FAISS `IndexFlatIP` is used where the runtime provides it; the local development
 fallback is an exact NumPy inner-product search, so the ranking remains
 deterministic and correct.
@@ -222,7 +220,7 @@ signal is missing, its weight is explicitly removed and the remaining weights
 are renormalized. The output includes the individual scores and actual weights
 used for every result. No fake zero score is inserted.
 
-The provisional minimum final score is `0.62`. Results below it return
+The provisional minimum final score is `0.50`. Results below it return
 `no_suitable_match=true` with no product matches. In the browser artifact, a
 candidate must also reach Medium match confidence and a calibrated visual score
 of at least `0.50`; otherwise no historical product is shown and the demand

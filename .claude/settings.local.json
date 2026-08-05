@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir -p /Users/santoshkumar/Data_science/CB_github/turtle/.claude)",
+      "Bash(awk -F: '{print $1\": \"$0}')",
+      "Bash(grep -n -B2 -A6 \"^\\\\.upcoming-card,\\\\s*$\" frontend/app/globals.css)",
+      "Bash(curl -s \"http://localhost:3000/_next/static/chunks/app_globals_0jn8.0u.css\")",
+      "Bash(lsof -nP -iTCP:3000 -sTCP:LISTEN)",
+      "Bash(curl -s \"http://localhost:3000/\")",
+      "Bash(npm run *)",
+      "Bash(node --test tests/season-intelligence.test.mjs)",
+      "Read(//tmp/**)",
+      "Bash(npx tsc *)",
+      "Bash(grep -o \".upcoming-card,.settings-card{[^}]*}\")",
+      "Bash(python3 -c ' *)",
+      "Bash(grep -n \"^\\\\.evidence-panel {$\\\\|^\\\\.evidence-header {$\\\\|^\\\\.evidence-intro p {$\\\\|^\\\\.evidence-product-pair {$\\\\|^\\\\.evidence-product-card {$\\\\|^\\\\.evidence-product-image {$\\\\|^\\\\.image-fallback\\\\.evidence-product-image\\\\|^\\\\.evidence-product-card > span\\\\|^\\\\.evidence-product-card small,\\\\|^\\\\.evidence-product-card strong {\\\\|^\\\\.evidence-product-card b {\\\\|^\\\\.evidence-pair-arrow {\" /Users/santoshkumar/Data_science/CB_github/turtle/frontend/app/globals.css)",
+      "Bash(curl -s \"http://localhost:3000/\" -o /tmp/page.html)",
+      "Bash(curl -s \"http://localhost:3000/_next/static/chunks/app_globals_0jn8.0u.css\" -o /tmp/served.css)",
+      "Bash(npx --no-install tsc --noEmit -p tsconfig.json)",
+      "Bash(kill 14811)",
+      "Bash(lsof -i :3000 -sTCP:LISTEN)",
+      "Bash(curl -s http://localhost:3000/_next/static/chunks/app_globals_0jn8.0u.css)",
+      "Bash(xxd)",
+      "Bash(perl -i -pe 'chomp if eof' app/globals.css)",
+      "Bash(touch app/globals.css app/page.tsx)",
+      "Bash(touch app/globals.css)",
+      "Bash(ps -p 16563 -o pid,ppid,etime,command)",
+      "Bash(kill 16563)",
+      "Bash(ps -p 16563 -o pid,command)",
+      "Bash(find . -iname \"*.json\" -newer Makefile -not -path \"*/node_modules/*\" -not -path \"*/.git/*\" 2>/dev/null | head -20; echo \"---\"; ls -la frontend/public/product-images 2>/dev/null | head; echo \"---cache---\"; du -sh ~/.cache/huggingface 2>/dev/null; find ~/.cache/huggingface -maxdepth 2 -iname \"*fashion*\" -o -iname \"*dino*\" -o -iname \"*siglip*\" 2>/dev/null | head -20)",
+      "Bash(ls .venv/bin/python 2>/dev/null && echo OK || echo \"no venv\"; ls DATA 2>/dev/null | head -5)",
+      "Bash(PYTHONPATH=backend/src .venv/bin/python -m data_pipeline.prepare_real_data --with-vision --verbose --sample-size 200 --sample-seed 27 --output tmp/generated-data-visual-sample-200-top4-rebuild.json --log-file tmp/data-vision-sample-200-top4-rebuild.log)"
+    ]
+  }
+}

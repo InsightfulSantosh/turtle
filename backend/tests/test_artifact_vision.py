@@ -187,24 +187,38 @@ def test_two_stage_visual_artifact_reranks_only_same_item_type_candidates(
     assert output["reranker"]["modelId"] == "local/test-dino-reranker"
     assert output["reranker"]["candidateIndex"]["metric"].startswith("inner-product")
     assert output["reranker"]["sameItemTypeConstraint"] is True
-    assert output["reranker"]["sameDesignConstraint"] is True
+    assert output["reranker"]["sameDesignConstraint"] is False
+    assert "sameColourFamilyConstraint" not in output["reranker"]
+    assert output["reranker"]["visualOnlyRanking"] is True
     assert output["reranker"]["appearance"]["colourDescriptor"]["space"] == "CIELAB"
+    assert output["reranker"]["appearance"]["colourDescriptor"]["method"] == (
+        "dominant-palette-CIEDE2000"
+    )
     assert output["reranker"]["appearance"]["weights"] == {
-        "neural": 0.6,
-        "colour": 0.3,
+        "neural": 0.45,
+        "colour": 0.45,
         "texture": 0.1,
     }
     upcoming_candidates = [row for row in output["candidatePairs"] if row["leftId"] == "OTSH-200-1001"]
     assert [row["candidateRank"] for row in upcoming_candidates] == [1, 2]
     assert {row["rightId"] for row in upcoming_candidates} == {
         "AW25-OTSH-100-1001",
-        "AW25-OTSH-101-1001",
+        "AW25-OTSH-102-1001",
     }
     assert all("colourDistance" in row and "textureDistance" in row for row in upcoming_candidates)
-    assert all(row["colourDistance"] is None and row["textureDistance"] is None for row in upcoming_candidates)
-    segmentation = output["reranker"]["appearance"]["segmentation"]
-    assert segmentation["maskRequiredForColourAndTexture"] is True
-    assert segmentation["unavailableAppearanceImages"] == 5
+    assert all(row["colourDistance"] is not None and row["textureDistance"] is not None for row in upcoming_candidates)
+    appearance = output["reranker"]["appearance"]
+    assert "segmentation" not in appearance
+    assert appearance["colourDescriptor"]["fullImage"] is False
+    assert appearance["colourDescriptor"]["paletteSize"] == 4
+    assert appearance["colourGate"] == {
+        "enabled": True,
+        "maximumDistance": 0.2,
+        "maximumDeltaE": 10.0,
+        "policy": "exclude candidate when garment-palette perceptual ΔE exceeds the limit",
+    }
+    assert output["reranker"]["gateAudit"]["upcoming"]["retrievedCandidates"] == 2
+    assert output["reranker"]["gateAudit"]["upcoming"]["acceptedCandidates"] == 2
 
 
 def test_pattern_gate_excludes_visibly_different_candidates_with_the_same_design_label(
@@ -255,6 +269,8 @@ def test_pattern_gate_excludes_visibly_different_candidates_with_the_same_design
         reranker=FakeDetailEncoder(),
         preprocessor=ImagePreprocessor(pad_to_square=False),
         candidate_count=2,
+        colour_gate_enabled=False,
+        pattern_gate_enabled=True,
         pattern_max_distance=0.1,
     )
 
@@ -264,7 +280,134 @@ def test_pattern_gate_excludes_visibly_different_candidates_with_the_same_design
     assert output["reranker"]["patternGate"] == {
         "enabled": True,
         "method": "three-scale-centre-garment-body-DINOv2",
-        "designs": "checks, stripes, prints, structured fabrics",
+        "scope": (
+            "all visually retrieved candidates except OTTR; OTTR hard-gates only "
+            "CHECKS, PRINTS, STRIPES and DOBBY/STRUCTURE"
+        ),
         "maximumDistance": 0.1,
         "policy": "exclude candidate when the body-pattern distance exceeds the limit",
     }
+
+
+def test_plain_ottr_bypasses_hard_pattern_gate_but_retains_dino_score(
+    tmp_path: Path,
+) -> None:
+    settings = PipelineSettings(
+        data_root=tmp_path / "DATA",
+        temporary_root=tmp_path / "tmp",
+        output_path=tmp_path / "artifact.json",
+    )
+    _save_image(settings.historical_image_root / "OTTR-100-1001.jpg", (255, 0, 0))
+    _save_image(settings.upcoming_image_root / "OTTR-200-1001.jpg", (0, 0, 255))
+    source = {
+        "historical": [
+            {
+                "id": "AW25-OTTR-100-1001",
+                "sourceId": "OTTR-100-1001",
+                "itemType": "OTTR",
+                "design": "PLAINS",
+                "imageUrl": "/product-images/historical/OTTR-100-1001",
+            }
+        ],
+        "upcoming": [
+            {
+                "id": "OTTR-200-1001",
+                "itemType": "OTTR",
+                "design": "PLAINS",
+                "imageUrl": "/product-images/upcoming/OTTR-200-1001",
+            }
+        ],
+    }
+
+    output = build_artifact_vision_output(
+        source,
+        settings=settings,
+        encoder=FakeEncoder(),
+        reranker=FakeDetailEncoder(),
+        preprocessor=ImagePreprocessor(pad_to_square=False),
+        candidate_count=1,
+        colour_gate_enabled=False,
+        pattern_gate_enabled=True,
+        pattern_max_distance=0.1,
+    )
+
+    candidate = next(
+        row for row in output["candidatePairs"] if row["leftId"] == "OTTR-200-1001"
+    )
+    assert candidate["patternDistance"] > 0.1
+    assert candidate["dinoDistance"] == candidate["patternDistance"]
+    audit = output["reranker"]["gateAudit"]["upcoming"]
+    assert audit["patternGateApplied"] == 0
+    assert audit["patternGateBypassed"] == 1
+    assert audit["patternRejected"] == 0
+    assert output["reranker"]["appearance"]["itemTypeOverrides"]["OTTR"] == {
+        "analysisRegion": "waist-to-lower-leg trouser ROI excluding footwear",
+        "relativeBox": [0.16, 0.28, 0.84, 0.8],
+        "usedFor": [
+            "FashionSigLIP retrieval",
+            "global DINO detail",
+            "multi-scale DINO pattern detail",
+            "dominant colour palette",
+            "texture descriptor",
+        ],
+        "displayedImageModified": False,
+        "patternHardGateDesigns": ["CHECKS", "PRINTS", "STRIPES", "DOBBY/STRUCTURE"],
+    }
+
+
+def test_colour_gate_uses_image_colour_and_ignores_colour_labels(tmp_path: Path) -> None:
+    settings = PipelineSettings(
+        data_root=tmp_path / "DATA",
+        temporary_root=tmp_path / "tmp",
+        output_path=tmp_path / "artifact.json",
+    )
+    _save_image(settings.historical_image_root / "OTSH-100-1001.jpg", (255, 0, 0))
+    _save_image(settings.historical_image_root / "OTSH-101-1001.jpg", (0, 0, 255))
+    _save_image(settings.upcoming_image_root / "OTSH-200-1001.jpg", (255, 0, 0))
+    source = {
+        "historical": [
+            {
+                "id": "AW25-OTSH-100-1001",
+                "sourceId": "OTSH-100-1001",
+                "itemType": "OTSH",
+                "design": "PLAINS",
+                "colour": "BLUE",
+                "imageUrl": "/product-images/historical/OTSH-100-1001",
+            },
+            {
+                "id": "AW25-OTSH-101-1001",
+                "sourceId": "OTSH-101-1001",
+                "itemType": "OTSH",
+                "design": "PLAINS",
+                "colour": "RED",
+                "imageUrl": "/product-images/historical/OTSH-101-1001",
+            },
+        ],
+        "upcoming": [
+            {
+                "id": "OTSH-200-1001",
+                "itemType": "OTSH",
+                "design": "PLAINS",
+                "colour": "GREEN",
+                "imageUrl": "/product-images/upcoming/OTSH-200-1001",
+            }
+        ],
+    }
+
+    output = build_artifact_vision_output(
+        source,
+        settings=settings,
+        encoder=FakeEncoder(),
+        reranker=FakeDetailEncoder(),
+        preprocessor=ImagePreprocessor(pad_to_square=False),
+        candidate_count=2,
+        pattern_gate_enabled=False,
+        colour_gate_enabled=True,
+        colour_max_distance=0.2,
+    )
+
+    candidates = [row for row in output["candidatePairs"] if row["leftId"] == "OTSH-200-1001"]
+    assert [row["rightId"] for row in candidates] == ["AW25-OTSH-100-1001"]
+    assert candidates[0]["colourDistance"] < 1e-6
+    assert candidates[0]["colourDeltaE"] < 1e-6
+    assert output["reranker"]["gateAudit"]["upcoming"]["colourRejected"] == 1

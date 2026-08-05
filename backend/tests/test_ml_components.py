@@ -26,7 +26,7 @@ def item(item_id: str, item_type: str = "OTSH") -> dict:
     }
 
 
-def test_ranker_combines_available_product_evidence() -> None:
+def test_ranker_uses_visual_score_inside_the_same_item_type() -> None:
     product = item("NEW")
     candidates = [
         Candidate(item("GOOD"), 0.82, 500, seasons_observed=3, feedback_score=1.0),
@@ -40,7 +40,9 @@ def test_ranker_combines_available_product_evidence() -> None:
     ]
     ranked = CandidateReranker().rank(product, candidates)
     assert ranked[0].candidate.item["id"] == "GOOD"
-    assert ranked[0].attribute_score > ranked[1].attribute_score
+    assert len(ranked) == 1
+    assert ranked[0].score == 0.82
+    assert ranked[0].features == {"vector_similarity": 0.82}
 
 
 def test_optimizer_respects_budget_capacity_and_pack() -> None:

@@ -9,15 +9,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
-from machine_learning.model import (
-    attribute_similarity,
-    combined_similarity,
-    demand_uncertainty,
-    fit_demand_pipeline,
-    recommend_one,
-)
+from machine_learning.model import recommend_one
 
 
 class RecommendationRuntime:
@@ -29,47 +21,34 @@ class RecommendationRuntime:
         self.artifact = json.loads(artifact_path.read_text(encoding="utf-8"))
         self.meta = self.artifact["meta"]
         self.model = dict(self.meta["model"])
-        self.attribute_weights = {
-            str(name): float(weight) for name, weight in self.model.get("attributeWeights", {}).items()
-        } or None
         self.history = self.artifact["historical"]
-        self.targets = np.asarray(
-            [float(item["salesTarget"]) for item in self.history],
-            dtype=float,
-        )
-        self.demand_pipeline = fit_demand_pipeline(
-            self.history,
-            self.targets,
-            float(self.model["ridgeAlpha"]),
-        )
 
     def recommend(
         self,
         product: Mapping[str, Any],
         *,
         target_sell_through: float = 0.70,
+        minimum_visual_score: float = 0.50,
         visual_similarities: Mapping[str, float] | None = None,
     ) -> dict[str, Any]:
         item = dict(product)
         visual_scores = visual_similarities or {}
         matches: list[dict[str, Any]] = []
-        attribute_weight = float(self.model["attributeWeight"])
-
         for historical in self.history:
-            attribute, breakdown = attribute_similarity(
-                item,
-                historical,
-                self.attribute_weights,
-            )
+            if str(historical.get("itemType")) != str(item.get("itemType")):
+                continue
             visual = visual_scores.get(historical["id"])
-            hybrid = combined_similarity(attribute, visual, attribute_weight)
+            if visual is None:
+                continue
             matches.append(
                 {
                     "historicalId": historical["id"],
-                    "attributeScore": round(attribute, 4),
                     "visualScore": visual,
-                    "hybridScore": round(hybrid, 4),
-                    "attributeBreakdown": breakdown,
+                    "fashionVisualScore": None,
+                    "dinoVisualScore": None,
+                    "colourVisualScore": None,
+                    "textureVisualScore": None,
+                    "hybridScore": round(float(visual), 4),
                 }
             )
 
@@ -78,37 +57,12 @@ class RecommendationRuntime:
             item,
             self.history,
             matches,
-            self.targets,
-            self.demand_pipeline,
-            dict(self.model),
-        )
-
-        for source, destination in (
-            ("expectedSales", "quantity"),
-            ("salesLow", "low"),
-            ("salesHigh", "high"),
-            ("analogueSales", "analogueQuantity"),
-            ("regressionSales", "regressionQuantity"),
-            ("salesIntervalHalfWidth", "intervalHalfWidth"),
-        ):
-            result[destination] = max(
-                100,
-                min(
-                    2_000,
-                    int(round((result[source] / target_sell_through) / 25) * 25),
-                ),
-            )
-
-        result["uncertaintyRatio"] = round(
-            result["salesIntervalHalfWidth"] / max(result["expectedSales"], 1),
-            4,
-        )
-        result["demandUncertainty"] = demand_uncertainty(
-            result["expectedSales"],
-            result["salesIntervalHalfWidth"],
+            self.model,
+            target_sell_through=target_sell_through,
+            minimum_visual_score=minimum_visual_score,
         )
         no_suitable_match = bool(result["noSuitableMatch"])
-        warnings = ["attribute_only"] if not visual_scores else []
+        warnings = ["no_visual_evidence"] if not visual_scores else []
         if no_suitable_match:
             warnings.append("no_suitable_visual_match")
 
@@ -117,6 +71,6 @@ class RecommendationRuntime:
             "productId": item["id"],
             "modelVersion": self.model["version"],
             "recommendation": result,
-            "matches": ([] if no_suitable_match else matches[: int(self.model["topK"])]),
+            "matches": matches[:3],
             "warnings": warnings,
         }

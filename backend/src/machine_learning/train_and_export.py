@@ -10,7 +10,7 @@ from machine_learning.model import build_model_artifact
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Train and export the Turtle Season Intelligence model artifact")
+    parser = argparse.ArgumentParser(description="Build and export the Turtle visual recommendation artifact")
     parser.add_argument("--source", type=Path, default=paths.model_artifact)
     parser.add_argument("--vision", type=Path, required=True)
     parser.add_argument("--output", type=Path, default=paths.model_artifact)
@@ -26,9 +26,9 @@ def main() -> None:
 
     model = artifact["meta"]["model"]
     print(
-        f"Exported model v{model['version']} with {model['trainingRows']} rows; "
-        f"LOO WAPE={model['backtest']['wape']:.1%}; "
-        f"weights={model['attributeWeight']:.0%}/{model['visualWeight']:.0%}; "
+        f"Exported model v{model['version']}; "
+        f"policy={model['evidencePolicy']}; "
+        f"visual threshold={model['minimumVisualScore']:.0%}; "
         f"topK={model['topK']}"
     )
 

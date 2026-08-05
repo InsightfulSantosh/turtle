@@ -1,11 +1,4 @@
-"""Foreground-aware appearance signals for hybrid fashion retrieval.
-
-The preferred production path is a text-guided garment box followed by SAM 2
-segmentation. A conservative border-background mask remains as a secondary
-fallback for clean studio imagery. When neither mask passes its quality gate,
-colour and texture are deliberately unavailable rather than being calculated
-from the original background.
-"""
+"""Garment-focused appearance signals for visual-only fashion retrieval."""
 
 from __future__ import annotations
 
@@ -16,17 +9,19 @@ from typing import Any
 import numpy as np
 from PIL import Image
 
-from fashion_matching.garment_segmentation import GarmentSegmenter
-from fashion_matching.taxonomy import colour_family
-
-COLOUR_BINS_PER_CHANNEL = 8
-COLOUR_DESCRIPTOR_DIMENSION = COLOUR_BINS_PER_CHANNEL**3
+COLOUR_PALETTE_SIZE = 4
+COLOUR_PALETTE_COMPONENTS = 4  # Lab centre + cluster weight
+COLOUR_DESCRIPTOR_DIMENSION = COLOUR_PALETTE_SIZE * COLOUR_PALETTE_COMPONENTS
+COLOUR_DELTA_E_SCALE = 50.0
 TEXTURE_ORIENTATION_BINS = 8
 TEXTURE_ENERGY_BINS = 8
 TEXTURE_DESCRIPTOR_DIMENSION = TEXTURE_ORIENTATION_BINS + TEXTURE_ENERGY_BINS
-_MASK_WORKING_SIDE = 384
-_WHITE_BACKGROUND = np.asarray([245, 245, 245], dtype=np.uint8)
-_GARMENT_CROP_MARGIN = 0.08
+_DESCRIPTOR_WORKING_SIDE = 384
+# Stable waist-to-lower-leg crop for OTTR catalogue photography.  The SS27
+# images usually place footwear in the bottom ~18% of the frame, while the
+# historical catalogue uses trouser-only composites.  Ending at 80% keeps the
+# trouser silhouette and fabric but removes the footwear mismatch.
+OTTR_TROUSER_ROI = (0.16, 0.28, 0.84, 0.80)
 
 # Preserve the source taxonomy while treating only clear spelling and plural
 # variants as equivalent. A generic print is deliberately not treated as a
@@ -87,21 +82,24 @@ def requires_pattern_gate(value: Any) -> bool:
     return canonical_retrieval_design(value) in _PATTERN_GATED_DESIGNS
 
 
+def requires_ottr_pattern_gate(value: Any) -> bool:
+    """Limit OTTR hard rejection to designs with visible repeat/texture."""
+
+    return canonical_retrieval_design(value) in {
+        "CHECKS",
+        "STRIPES",
+        "PRINTS",
+        "DOBBY/STRUCTURE",
+    }
+
+
 @dataclass(frozen=True)
 class AppearanceFeatures:
-    """Masked appearance features plus audit information for one image."""
+    """Appearance features calculated without changing the displayed image."""
 
     image: Image.Image
-    colour_vector: np.ndarray | None
-    texture_vector: np.ndarray | None
-    mask_coverage: float
-    mask_confidence: float
-    segmentation_method: str
-    fallback_reason: str | None = None
-
-    @property
-    def masked(self) -> bool:
-        return self.fallback_reason is None
+    colour_vector: np.ndarray
+    texture_vector: np.ndarray
 
 
 def _l2_normalize(values: np.ndarray) -> np.ndarray:
@@ -156,116 +154,251 @@ def _rgb_to_lab(rgb: np.ndarray) -> np.ndarray:
     return np.stack((lightness, a_channel, b_channel), axis=-1)
 
 
-def _border_pixels(values: np.ndarray) -> np.ndarray:
-    height, width = values.shape[:2]
-    thickness = max(1, min(height, width) // 40)
-    return np.concatenate(
-        (
-            values[:thickness].reshape(-1, values.shape[-1]),
-            values[-thickness:].reshape(-1, values.shape[-1]),
-            values[thickness:-thickness, :thickness].reshape(-1, values.shape[-1]),
-            values[thickness:-thickness, -thickness:].reshape(-1, values.shape[-1]),
-        )
-    )
-
-
-def _majority_mask(mask: np.ndarray) -> np.ndarray:
-    """Remove isolated pixels and close one-pixel holes without scipy."""
-
-    padded = np.pad(mask.astype(np.uint8), 1)
-    neighbours = sum(
-        padded[row : row + mask.shape[0], column : column + mask.shape[1]] for row in range(3) for column in range(3)
-    )
-    return neighbours >= 5
-
-
 def _working_image(image: Image.Image) -> Image.Image:
     longest_side = max(image.size)
-    if longest_side <= _MASK_WORKING_SIDE:
+    if longest_side <= _DESCRIPTOR_WORKING_SIDE:
         return image
-    scale = _MASK_WORKING_SIDE / longest_side
+    scale = _DESCRIPTOR_WORKING_SIDE / longest_side
     size = (max(round(image.width * scale), 1), max(round(image.height * scale), 1))
     return image.resize(size, Image.Resampling.BILINEAR)
 
 
-def _foreground_mask(image: Image.Image) -> tuple[np.ndarray | None, float, str | None]:
-    """Return a reliable foreground mask or an explicit fallback reason."""
+def visual_analysis_region(image: Image.Image, item_type: Any = None) -> Image.Image:
+    """Return the non-destructive region used for detailed visual analysis.
 
-    working = _working_image(image)
+    OTTR catalogue layouts frequently place swatches, logos, shirts, hands and
+    shoes around the trouser. A stable waist-to-lower-leg crop retains the
+    waistband, seat and trouser silhouette while excluding footwear and most
+    other distractors. Other item types deliberately keep the established
+    full-image analysis path.
+    """
+
+    source = image.convert("RGB")
+    if canonical_retrieval_value(item_type) != "OTTR":
+        return source
+    left, top, right, bottom = OTTR_TROUSER_ROI
+    box = (
+        round(source.width * left),
+        round(source.height * top),
+        max(round(source.width * right), round(source.width * left) + 2),
+        max(round(source.height * bottom), round(source.height * top) + 2),
+    )
+    try:
+        return source.crop(box)
+    finally:
+        source.close()
+
+
+def _garment_body_rgb(image: Image.Image, item_type: Any = None) -> np.ndarray:
+    """Return foreground pixels from the central garment body.
+
+    Catalogue photography in this project is predominantly centred on white or
+    near-white backgrounds.  The crop removes logos, fabric swatches, faces and
+    most lower-body styling; border-colour suppression then removes the studio
+    background.  This is an internal measurement only and never changes the
+    product image served by the application.
+    """
+
+    analysis_region = visual_analysis_region(image, item_type)
+    working = _working_image(analysis_region)
     rgb = np.asarray(working, dtype=np.uint8)
-    lab = _rgb_to_lab(rgb)
-    border = _border_pixels(lab)
-    background = np.median(border, axis=0)
-    border_distances = np.linalg.norm(border - background, axis=1)
-    border_spread = float(np.percentile(border_distances, 75))
-    if border_spread > 12.0:
-        return None, 0.0, "non_uniform_border"
+    height, width = rgb.shape[:2]
+    left, right = round(width * 0.14), round(width * 0.86)
+    top, bottom = round(height * 0.16), round(height * 0.90)
+    roi = rgb[top:max(bottom, top + 1), left:max(right, left + 1)]
+    roi_lab = _rgb_to_lab(roi)
 
-    threshold = max(14.0, float(np.percentile(border_distances, 95)) + 8.0)
-    raw_mask = np.linalg.norm(lab - background, axis=2) > threshold
-    mask = _majority_mask(raw_mask)
-    coverage = float(mask.mean())
-    if not 0.05 <= coverage <= 0.90:
-        return None, coverage, "implausible_foreground_coverage"
+    border_width = max(1, round(min(height, width) * 0.035))
+    border = np.concatenate(
+        (
+            rgb[:border_width].reshape(-1, 3),
+            rgb[-border_width:].reshape(-1, 3),
+            rgb[:, :border_width].reshape(-1, 3),
+            rgb[:, -border_width:].reshape(-1, 3),
+        ),
+        axis=0,
+    )
+    background_lab = np.median(_rgb_to_lab(border), axis=0)
+    background_distance = np.linalg.norm(roi_lab - background_lab, axis=-1)
+    chroma = np.linalg.norm(roi_lab[..., 1:], axis=-1)
+    near_white = (roi_lab[..., 0] >= 94.0) & (chroma <= 10.0)
+    foreground = (background_distance >= 9.0) & ~near_white
 
-    height, width = mask.shape
-    centre = mask[height // 4 : max(3 * height // 4, height // 4 + 1), width // 4 : max(3 * width // 4, width // 4 + 1)]
-    centre_coverage = float(centre.mean()) if centre.size else 0.0
-    if centre_coverage < 0.08:
-        return None, coverage, "foreground_not_central"
-
-    background_confidence = float(np.clip(1.0 - border_spread / 12.0, 0.0, 1.0))
-    coverage_confidence = float(np.clip(1.0 - abs(coverage - 0.42) / 0.55, 0.0, 1.0))
-    centre_confidence = float(np.clip(centre_coverage / 0.40, 0.0, 1.0))
-    confidence = 0.55 * background_confidence + 0.30 * coverage_confidence + 0.15 * centre_confidence
-    if confidence < 0.60:
-        return None, confidence, "low_mask_confidence"
-
-    if working.size != image.size:
-        mask_image = Image.fromarray(mask.astype(np.uint8) * 255)
-        mask = np.asarray(mask_image.resize(image.size, Image.Resampling.NEAREST), dtype=bool)
-    return mask, confidence, None
-
-
-def _masked_image(image: Image.Image, mask: np.ndarray) -> Image.Image:
-    source = np.asarray(image, dtype=np.uint8)
-    row_indices, column_indices = np.where(mask)
-    if not len(row_indices) or not len(column_indices):
-        return image.copy()
-    top, bottom = int(row_indices.min()), int(row_indices.max()) + 1
-    left, right = int(column_indices.min()), int(column_indices.max()) + 1
-    margin = max(round(max(bottom - top, right - left) * _GARMENT_CROP_MARGIN), 2)
-    top = max(top - margin, 0)
-    bottom = min(bottom + margin, image.height)
-    left = max(left - margin, 0)
-    right = min(right + margin, image.width)
-    source = source[top:bottom, left:right]
-    mask = mask[top:bottom, left:right]
-    composite = np.where(mask[..., np.newaxis], source, _WHITE_BACKGROUND)
-    return Image.fromarray(composite.astype(np.uint8))
+    # Avoid an unstable descriptor when the source has a non-standard studio
+    # background.  The central crop is still safer than the full image.
+    if int(foreground.sum()) < max(round(foreground.size * 0.04), 32):
+        foreground = ~near_white
+    pixels = roi[foreground]
+    try:
+        return pixels if len(pixels) else roi.reshape(-1, 3)
+    finally:
+        if working is not analysis_region:
+            working.close()
+        analysis_region.close()
 
 
-def _colour_descriptor(rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    pixels = _rgb_to_lab(rgb)[mask]
-    if pixels.size == 0:
+def _dominant_colour_palette(rgb: np.ndarray) -> np.ndarray:
+    """Return four deterministic dominant Lab colours and their proportions."""
+
+    pixels = _rgb_to_lab(rgb).reshape(-1, 3).astype(np.float32)
+    if len(pixels) > 6_000:
+        indices = np.linspace(0, len(pixels) - 1, 6_000, dtype=int)
+        pixels = pixels[indices]
+    if not len(pixels):
         return np.zeros(COLOUR_DESCRIPTOR_DIMENSION, dtype=np.float32)
-    lightness = np.clip(pixels[:, 0] / 100 * COLOUR_BINS_PER_CHANNEL, 0, COLOUR_BINS_PER_CHANNEL - 1).astype(int)
-    a_channel = np.clip(
-        (pixels[:, 1] + 128) / 255 * COLOUR_BINS_PER_CHANNEL,
-        0,
-        COLOUR_BINS_PER_CHANNEL - 1,
-    ).astype(int)
-    b_channel = np.clip(
-        (pixels[:, 2] + 128) / 255 * COLOUR_BINS_PER_CHANNEL,
-        0,
-        COLOUR_BINS_PER_CHANNEL - 1,
-    ).astype(int)
-    flat_indices = lightness * COLOUR_BINS_PER_CHANNEL**2 + a_channel * COLOUR_BINS_PER_CHANNEL + b_channel
-    histogram = np.bincount(flat_indices, minlength=COLOUR_DESCRIPTOR_DIMENSION)
-    return _l2_normalize(histogram.astype(np.float32))
+
+    # Seed Lloyd clustering from frequent quantised colours, then add centres
+    # that maximise perceptual separation. This is deterministic across runs.
+    quantisation = np.asarray((4.0, 6.0, 6.0), dtype=np.float32)
+    quantised = np.round(pixels / quantisation).astype(np.int16)
+    cells, inverse, counts = np.unique(
+        quantised,
+        axis=0,
+        return_inverse=True,
+        return_counts=True,
+    )
+    cell_centres = np.stack(
+        [pixels[inverse == index].mean(axis=0) for index in range(len(cells))]
+    )
+    chosen = [int(np.argmax(counts))]
+    while len(chosen) < min(COLOUR_PALETTE_SIZE, len(cell_centres)):
+        minimum_distance = np.min(
+            np.linalg.norm(
+                cell_centres[:, None, :] - cell_centres[np.asarray(chosen)][None, :, :],
+                axis=2,
+            ),
+            axis=1,
+        )
+        score = minimum_distance**2 * np.sqrt(counts)
+        score[np.asarray(chosen)] = -1.0
+        chosen.append(int(np.argmax(score)))
+    centres = cell_centres[np.asarray(chosen)].astype(np.float32)
+
+    for _ in range(12):
+        distances = np.linalg.norm(pixels[:, None, :] - centres[None, :, :], axis=2)
+        assignments = np.argmin(distances, axis=1)
+        updated = centres.copy()
+        for index in range(len(centres)):
+            members = pixels[assignments == index]
+            if len(members):
+                updated[index] = members.mean(axis=0)
+        if np.allclose(updated, centres, atol=0.05):
+            centres = updated
+            break
+        centres = updated
+
+    distances = np.linalg.norm(pixels[:, None, :] - centres[None, :, :], axis=2)
+    assignments = np.argmin(distances, axis=1)
+    weights = np.asarray(
+        [(assignments == index).mean() for index in range(len(centres))],
+        dtype=np.float32,
+    )
+    order = np.argsort(-weights, kind="stable")
+    centres = centres[order]
+    weights = weights[order]
+    descriptor = np.zeros((COLOUR_PALETTE_SIZE, COLOUR_PALETTE_COMPONENTS), dtype=np.float32)
+    descriptor[: len(centres), :3] = centres
+    descriptor[: len(weights), 3] = weights
+    return descriptor.reshape(-1)
 
 
-def _texture_descriptor(rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
+def delta_e_ciede2000(left: np.ndarray, right: np.ndarray) -> np.ndarray:
+    """Vectorised CIEDE2000 perceptual colour difference."""
+
+    left_lab = np.asarray(left, dtype=np.float64)
+    right_lab = np.asarray(right, dtype=np.float64)
+    left_l, left_a, left_b = np.moveaxis(left_lab, -1, 0)
+    right_l, right_a, right_b = np.moveaxis(right_lab, -1, 0)
+    left_c = np.hypot(left_a, left_b)
+    right_c = np.hypot(right_a, right_b)
+    mean_c = (left_c + right_c) / 2.0
+    adjustment = 0.5 * (
+        1.0 - np.sqrt(mean_c**7 / np.maximum(mean_c**7 + 25.0**7, 1e-12))
+    )
+    left_a_prime = (1.0 + adjustment) * left_a
+    right_a_prime = (1.0 + adjustment) * right_a
+    left_c_prime = np.hypot(left_a_prime, left_b)
+    right_c_prime = np.hypot(right_a_prime, right_b)
+    left_h_prime = np.mod(np.degrees(np.arctan2(left_b, left_a_prime)), 360.0)
+    right_h_prime = np.mod(np.degrees(np.arctan2(right_b, right_a_prime)), 360.0)
+
+    delta_l = right_l - left_l
+    delta_c = right_c_prime - left_c_prime
+    hue_difference = right_h_prime - left_h_prime
+    hue_difference = np.where(hue_difference > 180.0, hue_difference - 360.0, hue_difference)
+    hue_difference = np.where(hue_difference < -180.0, hue_difference + 360.0, hue_difference)
+    hue_difference = np.where(left_c_prime * right_c_prime == 0.0, 0.0, hue_difference)
+    delta_h = 2.0 * np.sqrt(left_c_prime * right_c_prime) * np.sin(
+        np.radians(hue_difference) / 2.0
+    )
+
+    mean_l = (left_l + right_l) / 2.0
+    mean_c_prime = (left_c_prime + right_c_prime) / 2.0
+    hue_sum = left_h_prime + right_h_prime
+    mean_h = np.where(
+        left_c_prime * right_c_prime == 0.0,
+        hue_sum,
+        np.where(
+            np.abs(left_h_prime - right_h_prime) <= 180.0,
+            hue_sum / 2.0,
+            np.where(hue_sum < 360.0, (hue_sum + 360.0) / 2.0, (hue_sum - 360.0) / 2.0),
+        ),
+    )
+    t_value = (
+        1.0
+        - 0.17 * np.cos(np.radians(mean_h - 30.0))
+        + 0.24 * np.cos(np.radians(2.0 * mean_h))
+        + 0.32 * np.cos(np.radians(3.0 * mean_h + 6.0))
+        - 0.20 * np.cos(np.radians(4.0 * mean_h - 63.0))
+    )
+    sl = 1.0 + 0.015 * (mean_l - 50.0) ** 2 / np.sqrt(20.0 + (mean_l - 50.0) ** 2)
+    sc = 1.0 + 0.045 * mean_c_prime
+    sh = 1.0 + 0.015 * mean_c_prime * t_value
+    rotation = 30.0 * np.exp(-((mean_h - 275.0) / 25.0) ** 2)
+    rc = 2.0 * np.sqrt(
+        mean_c_prime**7 / np.maximum(mean_c_prime**7 + 25.0**7, 1e-12)
+    )
+    rt = -rc * np.sin(np.radians(2.0 * rotation))
+    return np.sqrt(
+        (delta_l / sl) ** 2
+        + (delta_c / sc) ** 2
+        + (delta_h / sh) ** 2
+        + rt * (delta_c / sc) * (delta_h / sh)
+    )
+
+
+def dominant_palette_distance(left: np.ndarray, right: np.ndarray) -> float:
+    """Compare weighted Lab palettes and return a normalised [0, 2] distance."""
+
+    left_palette = np.asarray(left, dtype=np.float32).reshape(
+        COLOUR_PALETTE_SIZE, COLOUR_PALETTE_COMPONENTS
+    )
+    right_palette = np.asarray(right, dtype=np.float32).reshape(
+        COLOUR_PALETTE_SIZE, COLOUR_PALETTE_COMPONENTS
+    )
+    left_active = left_palette[:, 3] > 1e-6
+    right_active = right_palette[:, 3] > 1e-6
+    if not left_active.any() and not right_active.any():
+        return 0.0
+    if not left_active.any() or not right_active.any():
+        return 2.0
+    left_colours = left_palette[left_active, :3]
+    right_colours = right_palette[right_active, :3]
+    left_weights = left_palette[left_active, 3]
+    right_weights = right_palette[right_active, 3]
+    pairwise = delta_e_ciede2000(
+        left_colours[:, None, :],
+        right_colours[None, :, :],
+    )
+    directed_left = float(np.average(np.min(pairwise, axis=1), weights=left_weights))
+    directed_right = float(np.average(np.min(pairwise, axis=0), weights=right_weights))
+    palette_delta_e = (directed_left + directed_right) / 2.0
+    dominant_delta_e = float(delta_e_ciede2000(left_colours[0], right_colours[0]))
+    combined_delta_e = 0.70 * palette_delta_e + 0.30 * dominant_delta_e
+    return float(np.clip(combined_delta_e / COLOUR_DELTA_E_SCALE, 0.0, 2.0))
+
+
+def _texture_descriptor(rgb: np.ndarray) -> np.ndarray:
     values = np.asarray(rgb, dtype=np.float32) / 255.0
     gray = values[..., 0] * 0.299 + values[..., 1] * 0.587 + values[..., 2] * 0.114
     padded = np.pad(gray, 1, mode="edge")
@@ -273,7 +406,7 @@ def _texture_descriptor(rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
     gradient_y = padded[2:, 1:-1] - padded[:-2, 1:-1]
     magnitude = np.hypot(gradient_x, gradient_y)
     orientation = (np.arctan2(gradient_y, gradient_x) + np.pi) % np.pi
-    valid = mask & (magnitude > 1e-4)
+    valid = magnitude > 1e-4
     orientation_bins = np.minimum(
         (orientation[valid] / np.pi * TEXTURE_ORIENTATION_BINS).astype(int),
         TEXTURE_ORIENTATION_BINS - 1,
@@ -294,106 +427,57 @@ def _texture_descriptor(rgb: np.ndarray, mask: np.ndarray) -> np.ndarray:
     )
     local_energy = np.abs(gray - local_mean)
     energy_bins = np.minimum(
-        (local_energy[mask] / 0.25 * TEXTURE_ENERGY_BINS).astype(int),
+        (local_energy.reshape(-1) / 0.25 * TEXTURE_ENERGY_BINS).astype(int),
         TEXTURE_ENERGY_BINS - 1,
     )
     energy_histogram = np.bincount(energy_bins, minlength=TEXTURE_ENERGY_BINS).astype(np.float32)
     return _l2_normalize(np.concatenate((orientation_histogram, energy_histogram)))
 
 
-def extract_appearance_features(image: Image.Image, *, mask_enabled: bool = True) -> AppearanceFeatures:
-    """Mask a garment and derive only foreground-backed appearance signals."""
-
-    return _extract_appearance_features(
-        image,
-        mask_enabled=mask_enabled,
-    )
-
-
-def _extract_appearance_features(
+def extract_appearance_features(
     image: Image.Image,
-    *,
-    mask_enabled: bool,
-    item_type: str = "",
-    segmenter: GarmentSegmenter | None = None,
-    allow_border_fallback: bool = True,
+    item_type: Any = None,
 ) -> AppearanceFeatures:
-    """Implementation shared by the simple API and the pipeline integration."""
+    """Derive all retrieval signals from the configured analysis region."""
 
     source = image.convert("RGB")
-    mask: np.ndarray | None = None
-    confidence = 0.0
-    reason: str | None = "masking_disabled" if not mask_enabled else None
-    segmentation_method = "masking-disabled" if not mask_enabled else "fallback-original-image"
-    if mask_enabled and segmenter is not None:
-        semantic = segmenter.segment(source, item_type=item_type)
-        mask = semantic.mask
-        confidence = semantic.confidence
-        reason = semantic.fallback_reason
-        segmentation_method = semantic.method if mask is not None else "fallback-original-image"
-    if mask_enabled and mask is None and allow_border_fallback:
-        border_mask, border_confidence, border_reason = _foreground_mask(source)
-        if border_mask is not None:
-            mask = border_mask
-            confidence = border_confidence
-            reason = None
-            segmentation_method = "adaptive-lab-border-foreground-mask"
-        elif reason is None:
-            reason = border_reason
-    if mask is None:
-        prepared_image = source.copy()
-        mask_coverage = 0.0
-        descriptor_mask = np.ones((source.height, source.width), dtype=bool) if not mask_enabled else None
-    else:
-        prepared_image = _masked_image(source, mask)
-        mask_coverage = float(mask.mean())
-        descriptor_mask = mask
-    descriptor_image = _working_image(source)
-    if descriptor_mask is not None and descriptor_image.size != source.size:
-        descriptor_mask = np.asarray(
-            Image.fromarray(descriptor_mask.astype(np.uint8) * 255).resize(
-                descriptor_image.size,
-                Image.Resampling.NEAREST,
-            ),
-            dtype=bool,
+    analysis_image = visual_analysis_region(source, item_type)
+    descriptor_image = _working_image(analysis_image)
+    try:
+        rgb = np.asarray(descriptor_image, dtype=np.uint8)
+        # The item-type crop has already been applied to ``analysis_image``;
+        # passing no item type prevents an accidental second OTTR crop.
+        garment_rgb = _garment_body_rgb(analysis_image)
+        return AppearanceFeatures(
+            image=analysis_image,
+            colour_vector=_dominant_colour_palette(garment_rgb),
+            texture_vector=_texture_descriptor(rgb),
         )
-    rgb = np.asarray(descriptor_image, dtype=np.uint8)
-    colour_vector = _colour_descriptor(rgb, descriptor_mask) if descriptor_mask is not None else None
-    texture_vector = _texture_descriptor(rgb, descriptor_mask) if descriptor_mask is not None else None
-    return AppearanceFeatures(
-        image=prepared_image,
-        colour_vector=colour_vector,
-        texture_vector=texture_vector,
-        mask_coverage=round(mask_coverage, 4),
-        mask_confidence=round(confidence, 4),
-        segmentation_method=segmentation_method,
-        fallback_reason=reason,
-    )
+    except Exception:
+        analysis_image.close()
+        raise
+    finally:
+        if descriptor_image is not analysis_image:
+            descriptor_image.close()
+        source.close()
 
 
 def extract_pipeline_appearance_features(
     image: Image.Image,
-    *,
-    item_type: str,
-    mask_enabled: bool,
-    segmenter: GarmentSegmenter | None,
-    allow_border_fallback: bool,
+    item_type: Any = None,
 ) -> AppearanceFeatures:
-    """Pipeline entry point with an optional production garment segmenter."""
+    """Pipeline entry point for non-destructive garment appearance features."""
 
-    return _extract_appearance_features(
-        image,
-        mask_enabled=mask_enabled,
-        item_type=item_type,
-        segmenter=segmenter,
-        allow_border_fallback=allow_border_fallback,
-    )
+    return extract_appearance_features(image, item_type)
 
 
-def body_pattern_views(image: Image.Image) -> list[Image.Image]:
+def body_pattern_views(
+    image: Image.Image,
+    item_type: Any = None,
+) -> list[Image.Image]:
     """Return large/medium/fine centre-body crops for pattern comparison."""
 
-    source = image.convert("RGB")
+    source = visual_analysis_region(image, item_type)
     try:
         views: list[Image.Image] = []
         for fraction in (0.82, 0.66, 0.50):
@@ -446,29 +530,16 @@ class FashionCandidateRetriever:
         self._global = InnerProductIndex(vectors)
         type_groups: dict[str, list[int]] = defaultdict(list)
         design_groups: dict[str, list[int]] = defaultdict(list)
-        colour_groups: dict[str, list[int]] = defaultdict(list)
         type_design_groups: dict[tuple[str, str], list[int]] = defaultdict(list)
-        type_colour_groups: dict[tuple[str, str], list[int]] = defaultdict(list)
-        design_colour_groups: dict[tuple[str, str], list[int]] = defaultdict(list)
-        type_design_colour_groups: dict[tuple[str, str, str], list[int]] = defaultdict(list)
         for index, item in enumerate(candidates):
             item_type = canonical_retrieval_value(item.get("itemType"))
             design = canonical_retrieval_design(item.get("design"))
-            colour = colour_family(item.get("colour"))
             if item_type:
                 type_groups[item_type].append(index)
             if design:
                 design_groups[design].append(index)
-            if colour:
-                colour_groups[colour].append(index)
             if item_type and design:
                 type_design_groups[(item_type, design)].append(index)
-            if item_type and colour:
-                type_colour_groups[(item_type, colour)].append(index)
-            if design and colour:
-                design_colour_groups[(design, colour)].append(index)
-            if item_type and design and colour:
-                type_design_colour_groups[(item_type, design, colour)].append(index)
         self._by_type = {
             item_type: (indices, InnerProductIndex(vectors[np.asarray(indices)]))
             for item_type, indices in type_groups.items()
@@ -481,22 +552,6 @@ class FashionCandidateRetriever:
             key: (indices, InnerProductIndex(vectors[np.asarray(indices)]))
             for key, indices in type_design_groups.items()
         }
-        self._by_type_and_colour = {
-            key: (indices, InnerProductIndex(vectors[np.asarray(indices)]))
-            for key, indices in type_colour_groups.items()
-        }
-        self._by_design_and_colour = {
-            key: (indices, InnerProductIndex(vectors[np.asarray(indices)]))
-            for key, indices in design_colour_groups.items()
-        }
-        self._by_colour = {
-            colour: (indices, InnerProductIndex(vectors[np.asarray(indices)]))
-            for colour, indices in colour_groups.items()
-        }
-        self._by_type_and_design_and_colour = {
-            key: (indices, InnerProductIndex(vectors[np.asarray(indices)]))
-            for key, indices in type_design_colour_groups.items()
-        }
         self.backend = self._global.backend
 
     def search(
@@ -507,30 +562,16 @@ class FashionCandidateRetriever:
         *,
         require_same_item_type: bool,
         require_same_design: bool,
-        require_same_colour_family: bool,
     ) -> list[int]:
         item_type = canonical_retrieval_value(query.get("itemType"))
         design = canonical_retrieval_design(query.get("design"))
-        colour = colour_family(query.get("colour"))
         selected: tuple[list[int], InnerProductIndex] | None
-        if require_same_item_type and require_same_design and require_same_colour_family:
-            selected = (
-                self._by_type_and_design_and_colour.get((item_type, design, colour))
-                if item_type and design and colour
-                else None
-            )
-        elif require_same_item_type and require_same_design:
+        if require_same_item_type and require_same_design:
             selected = self._by_type_and_design.get((item_type, design)) if item_type and design else None
-        elif require_same_item_type and require_same_colour_family:
-            selected = self._by_type_and_colour.get((item_type, colour)) if item_type and colour else None
-        elif require_same_design and require_same_colour_family:
-            selected = self._by_design_and_colour.get((design, colour)) if design and colour else None
         elif require_same_item_type:
             selected = self._by_type.get(item_type) if item_type else None
         elif require_same_design:
             selected = self._by_design.get(design) if design else None
-        elif require_same_colour_family:
-            selected = self._by_colour.get(colour) if colour else None
         else:
             return self._global.search(vector, limit)
         if selected is not None:

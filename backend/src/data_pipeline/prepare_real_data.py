@@ -1,8 +1,9 @@
-"""Command-line entry point for the real-data ML pipeline."""
+"""Command-line entry point for the real-data visual recommendation pipeline."""
 
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 
 from data_pipeline.pipeline import RealDataPipeline
@@ -10,13 +11,12 @@ from data_pipeline.settings import PipelineSettings
 from fashion_matching.artifact_vision import build_artifact_vision_output
 from fashion_matching.config import MatchingSettings
 from fashion_matching.encoders import create_dino_encoder, create_encoder
-from fashion_matching.garment_segmentation import GroundedSam2GarmentSegmenter
 from fashion_matching.preprocessing import ImagePreprocessor
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description=("Ingest, validate and preprocess the real workbooks, then build the frontend ML artifact")
+        description=("Ingest, validate and preprocess the real workbooks, then build the visual recommendation artifact")
     )
     parser.add_argument("--output", type=Path)
     parser.add_argument(
@@ -29,10 +29,44 @@ def main() -> None:
     parser.add_argument("--device")
     parser.add_argument("--batch-size", type=int)
     parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show model loading and per-batch visual encoding progress",
+    )
+    parser.add_argument(
+        "--log-file",
+        type=Path,
+        help="Also write pipeline logs to this file for live terminal monitoring",
+    )
+    parser.add_argument(
         "--item-type",
         help="Build a scoped artifact containing only one canonical item type, such as OTSH",
     )
+    parser.add_argument(
+        "--sample-size",
+        type=int,
+        help=(
+            "Build a deterministic upcoming-product preview, balanced across "
+            "every item type and category type"
+        ),
+    )
+    parser.add_argument(
+        "--sample-seed",
+        type=int,
+        default=27,
+        help="Stable seed used to select products inside each preview stratum (default: 27)",
+    )
     args = parser.parse_args()
+
+    handlers: list[logging.Handler] = [logging.StreamHandler()]
+    if args.log_file is not None:
+        args.log_file.parent.mkdir(parents=True, exist_ok=True)
+        handlers.append(logging.FileHandler(args.log_file, mode="w", encoding="utf-8"))
+    logging.basicConfig(
+        level=logging.INFO if args.verbose else logging.WARNING,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+        handlers=handlers,
+    )
 
     settings = PipelineSettings.from_project(args.output)
     matching = MatchingSettings.from_environment()
@@ -62,22 +96,6 @@ def main() -> None:
             max_pixels=matching.max_image_pixels,
             minimum_dimension=matching.min_image_dimension,
             pad_to_square=matching.pad_to_square,
-            crop_uniform_background=matching.crop_uniform_background,
-        )
-        garment_segmenter = (
-            GroundedSam2GarmentSegmenter(
-                detector_model_id=matching.garment_detector_model_id,
-                detector_revision=matching.garment_detector_revision,
-                sam2_model_id=matching.garment_sam2_model_id,
-                sam2_revision=matching.garment_sam2_revision,
-                configured_device=device,
-                detector_threshold=matching.garment_detector_threshold,
-                text_threshold=matching.garment_text_threshold,
-                minimum_coverage=matching.garment_minimum_coverage,
-                maximum_coverage=matching.garment_maximum_coverage,
-            )
-            if matching.appearance_mask_enabled and matching.garment_segmentation_enabled
-            else None
         )
 
         def vision_builder(source):
@@ -91,12 +109,11 @@ def main() -> None:
                 reranker_weight_grid=matching.dino_weight_grid,
                 require_same_item_type=matching.dino_require_same_item_type,
                 require_same_design=matching.dino_require_same_design,
-                require_same_colour_family=matching.dino_require_same_colour_family,
+                visual_only_ranking=matching.visual_only_ranking,
                 pattern_gate_enabled=matching.pattern_gate_enabled,
                 pattern_max_distance=matching.pattern_max_distance,
-                appearance_mask_enabled=matching.appearance_mask_enabled,
-                garment_segmenter=garment_segmenter,
-                allow_border_mask_fallback=matching.garment_segmentation_border_fallback,
+                colour_gate_enabled=matching.colour_gate_enabled,
+                colour_max_distance=matching.colour_max_distance,
                 appearance_weights={
                     "neural": matching.appearance_neural_weight,
                     "colour": matching.appearance_colour_weight,
@@ -105,14 +122,19 @@ def main() -> None:
                 batch_size=batch_size,
             )
 
-    summary = RealDataPipeline(settings).run(vision_builder, item_type=args.item_type)
+    summary = RealDataPipeline(settings).run(
+        vision_builder,
+        item_type=args.item_type,
+        sample_size=args.sample_size,
+        sample_seed=args.sample_seed,
+    )
     print(
         f"Wrote {summary.output_path} with "
         f"{summary.historical_items} historical and "
         f"{summary.upcoming_items} upcoming products; "
         f"model v{summary.model_version}; "
-        f"{summary.selection_method}; "
-        f"WAPE={summary.backtest_wape:.1%}"
+        f"{summary.evidence_policy}; "
+        f"accepted visual matches={summary.accepted_matches}"
     )
 
 

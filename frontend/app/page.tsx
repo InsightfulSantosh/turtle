@@ -1,10 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import dataJson from "./generated-data-otsh-preview.json";
+import dataJson from "./generated-data.json";
 
 type Confidence = "High" | "Medium" | "Low";
-type DemandUncertainty = "Narrow" | "Moderate" | "Wide";
 type Tab = "compare" | "portfolio" | "method";
 
 type HistoricalItem = {
@@ -17,7 +16,6 @@ type HistoricalItem = {
   categoryType: string;
   fabric: string;
   colour: string;
-  colourFamily?: string;
   order: number;
   dispatch: number;
   sales: number;
@@ -25,20 +23,17 @@ type HistoricalItem = {
   imageUrl?: string | null;
   hasVisualFeature: boolean;
   salesTarget: number;
-  normalizedDemand: number;
   qualityFlags: string[];
 };
 
 type Match = {
   historicalId: string;
-  attributeScore: number;
   visualScore: number | null;
   fashionVisualScore: number | null;
   dinoVisualScore: number | null;
   colourVisualScore: number | null;
   textureVisualScore: number | null;
   hybridScore: number;
-  attributeBreakdown: Record<string, number>;
 };
 
 type UpcomingItem = {
@@ -51,7 +46,6 @@ type UpcomingItem = {
   fabric: string;
   season: string;
   colour: string;
-  colourFamily?: string;
   imageUrl?: string | null;
   hasVisualFeature: boolean;
   matches: Match[];
@@ -62,17 +56,12 @@ type UpcomingItem = {
     confidence: Confidence;
     matchConfidence: Confidence;
     noSuitableMatch: boolean;
-    demandUncertainty: DemandUncertainty;
-    uncertaintyRatio: number;
     expectedSales: number;
     salesLow: number;
     salesHigh: number;
     analogueSales: number;
-    regressionSales: number;
-    salesIntervalHalfWidth: number;
     analogueQuantity: number;
-    regressionQuantity: number;
-    intervalHalfWidth: number;
+    evidencePolicy: string;
     topMatchScore: number;
     modelVersion: string;
   };
@@ -80,7 +69,7 @@ type UpcomingItem = {
 };
 
 type ComparableProduct = Pick<UpcomingItem,
-  "itemType" | "design" | "categoryType" | "fabric" | "colour" | "colourFamily"
+  "itemType" | "design" | "categoryType" | "fabric" | "colour"
 >;
 
 type Dataset = {
@@ -97,7 +86,6 @@ type Dataset = {
     missingUpcomingImages: string[];
     confidenceCounts: Record<Confidence, number>;
     matchConfidenceCounts: Record<Confidence, number>;
-    demandUncertaintyCounts: Record<DemandUncertainty, number>;
     visualMethod: string;
     attributeAudit: {
       historicalSourceRange: string;
@@ -143,33 +131,42 @@ type Dataset = {
         weightGrid: number[];
         sameItemTypeConstraint: boolean;
         sameDesignConstraint?: boolean;
-        sameColourFamilyConstraint?: boolean;
+        visualOnlyRanking?: boolean;
+        patternGate?: {
+          enabled: boolean;
+          method: string;
+          scope: string;
+          maximumDistance: number;
+          policy: string;
+        };
         candidateIndex?: {
           engine: string;
           metric: string;
           fallback: string;
         };
         appearance?: {
-          segmentation: {
-            enabled: boolean;
-            method: string;
-            maskedImages: number;
-            semanticMaskedImages?: number;
-            borderFallbackMaskedImages?: number;
-            unavailableAppearanceImages?: number;
-            fallbackImages: number;
-            fallbackReasons?: Record<string, number>;
-            meanForegroundCoverage: number;
-            meanMaskConfidence: number;
-            maskRequiredForColourAndTexture?: boolean;
-            unmaskedNeuralFallback?: string;
-            model?: Record<string, string | number>;
-          };
           colourDescriptor: {
             space: string;
-            binsPerChannel: number;
-            maskOnly: boolean;
+            method: string;
+            paletteSize: number;
+            distance: string;
+            normalisationScaleDeltaE: number;
+            fullImage: boolean;
+            region?: string;
           };
+          colourGate?: {
+            enabled: boolean;
+            maximumDistance: number;
+            maximumDeltaE?: number;
+            policy: string;
+          };
+          itemTypeOverrides?: Record<string, {
+            analysisRegion: string;
+            relativeBox: number[];
+            usedFor: string[];
+            displayedImageModified: boolean;
+            patternHardGateDesigns: string[];
+          }>;
           textureDescriptor: {
             method: string;
             dimension: number;
@@ -181,34 +178,19 @@ type Dataset = {
     model: {
       version: string;
       status: string;
-      trainingRows: number;
-      validationRows: number;
-      targetSellThrough: number;
       algorithm: string;
-      demandLibrary: string;
-      demandPipeline: string;
-      modelSelection: string;
-      attributeWeights: Record<string, number>;
-      attributeWeightGrid: number[];
-      attributeWeight: number;
-      visualWeight: number;
+      evidencePolicy: string;
+      salesPolicy: string;
+      orderPolicy: string;
+      noMachineLearningForecast: boolean;
+      noAttributeMatching: boolean;
+      visualOnlyRanking?: boolean;
       dinoRerankWeight?: number;
       minimumVisualScore: number;
+      targetSellThrough?: number;
       minimumMatchConfidence: Confidence;
       noMatchPolicy: string;
       topK: number;
-      regressionBlend: number;
-      ridgeAlpha: number;
-      salesConformalHalfWidth: number;
-      conformalHalfWidth: number;
-      evaluation: string;
-      interval: string;
-      backtest: {
-        wape: number;
-        mae: number;
-        bias: number;
-        intervalCoverage: number;
-      };
     };
     dataQuality: {
       duplicateHistoricalRowsRemoved: number;
@@ -227,22 +209,18 @@ type Dataset = {
 type RankedMatch = Match & { combinedScore: number };
 type Decision = {
   ranked: RankedMatch[];
+  eligible: RankedMatch[];
+  selectedMatch?: RankedMatch;
   quantity: number;
   low: number;
   high: number;
   matchConfidence: Confidence;
   noSuitableMatch: boolean;
-  demandUncertainty: DemandUncertainty;
-  uncertaintyRatio: number;
   expectedSales: number;
   salesLow: number;
   salesHigh: number;
   analogueSales: number;
-  regressionSales: number;
-  salesIntervalHalfWidth: number;
   analogueQuantity: number;
-  regressionQuantity: number;
-  intervalHalfWidth: number;
 };
 
 const dataset = dataJson as unknown as Dataset;
@@ -257,42 +235,6 @@ const visualMatchingAvailable =
   dataset.meta.visionModel.upcomingCoverage > 0 &&
   dataset.meta.visionModel.historicalCoverage > 0;
 const numberFormatter = new Intl.NumberFormat("en-IN");
-
-// The artifact carries the controlled family after a current rebuild. This
-// fallback lets the screen label the existing preview as well; it is display
-// only—the Python retrieval taxonomy remains the matching authority.
-const colourFamilyFallbacks: Array<[string, readonly string[]]> = [
-  ["AQUA", ["AQUA", "CYAN", "TURQUOISE"]],
-  ["TEAL", ["TEAL", "SEA GREEN", "PETROL"]],
-  ["GREEN", ["GREEN", "MINT", "OLIVE", "LIME", "PISTA", "SAGE", "BOTTLE"]],
-  ["BLUE", ["BLUE", "INDIGO", "NAVY", "SKY"]],
-  ["NEUTRAL", ["BEIGE", "CREAM", "IVORY", "OFF WHITE", "NATURAL", "KHAKI", "STONE", "TAN", "FAWN"]],
-  ["BROWN", ["BROWN", "CHOCOLATE", "COCOA", "COFFEE"]],
-  ["GREY", ["GREY", "GRAY", "CHARCOAL"]],
-  ["BLACK", ["BLACK"]],
-  ["WHITE", ["WHITE"]],
-  ["METALLIC", ["SILVER", "GOLD", "BRONZE", "COPPER"]],
-  ["RED", ["RED", "MAROON", "WINE", "RUST"]],
-  ["ORANGE", ["ORANGE", "CORAL", "PEACH"]],
-  ["YELLOW", ["YELLOW", "LEMON", "MUSTARD", "OCHRE"]],
-  ["PINK", ["PINK", "ROSE", "MAGENTA", "MEGANTA", "ONION"]],
-  ["PURPLE", ["PURPLE", "LAVENDER", "MAUVE", "MOUVE", "VIOLET"]],
-  ["MULTI", ["MULTI"]],
-];
-
-function displayedColourFamily(product: Pick<ComparableProduct, "colour" | "colourFamily">) {
-  if (product.colourFamily) return product.colourFamily;
-  const sourceColour = product.colour.toUpperCase();
-  return colourFamilyFallbacks.find(([, names]) => names.some((name) => sourceColour.includes(name)))?.[0] ?? "Unmapped";
-}
-
-function hasSameColourFamily(
-  upcoming: Pick<ComparableProduct, "colour" | "colourFamily">,
-  historical: Pick<ComparableProduct, "colour" | "colourFamily">,
-) {
-  const upcomingFamily = displayedColourFamily(upcoming);
-  return upcomingFamily !== "Unmapped" && upcomingFamily === displayedColourFamily(historical);
-}
 
 const attributeValueReaders: Record<string, (item: ComparableProduct) => string> = {
   item: (product) => product.itemType,
@@ -314,180 +256,87 @@ const preferredCatalogAttributeOrder = [
   "colour",
   "design",
   "fabric",
-  "item",
   "category_type",
 ] as const;
-const activeAttributeKeys = new Set(
-  dataset.meta.attributeAudit.activeAttributes.map((attribute) => attribute.key),
-);
-const catalogAttributeOrder = preferredCatalogAttributeOrder.filter(
-  (key) => activeAttributeKeys.has(key),
-);
+const catalogAttributeOrder = preferredCatalogAttributeOrder;
 
 function attributeValue(item: ComparableProduct, key: string) {
   return attributeValueReaders[key]?.(item) || "Not provided";
 }
 
-function attributeMatchLabel(score: number) {
-  if (score >= 0.995) return "Exact match";
-  if (score >= 0.62) return "Related match";
-  if (score > 0) return "Partial match";
-  return "Different";
+function normalizeAttributeValue(value: string) {
+  return value.trim().toLowerCase();
 }
 
-function attributeMatchTone(score: number) {
-  if (score >= 0.995) return "exact";
-  if (score >= 0.62) return "related";
-  if (score > 0) return "partial";
-  return "different";
-}
-
-function clamp(value: number, minimum: number, maximum: number) {
-  return Math.max(minimum, Math.min(maximum, value));
-}
-
-function roundPack(value: number, pack = 25) {
-  return Math.round(value / pack) * pack;
+function attributeMatchStatus(upcomingValue: string, historicalValue: string): "exact" | "different" {
+  return normalizeAttributeValue(upcomingValue) === normalizeAttributeValue(historicalValue)
+    ? "exact"
+    : "different";
 }
 
 function scorePercent(value: number | null) {
   return value === null ? "N/A" : `${Math.round(value * 100)}%`;
 }
 
+function packRounded(value: number) {
+  return Math.max(0, Math.min(2000, Math.round(value / 25) * 25));
+}
+
 function makeDecision(
   item: UpcomingItem,
-  attributeWeight: number,
-  visualWeight: number,
-  targetSellThrough: number,
-  topK: number,
+  minimumSimilarity = dataset.meta.model.minimumVisualScore,
+  targetSellThrough = dataset.meta.model.targetSellThrough ?? 0.70,
+  selectedHistoricalId?: string | null,
 ): Decision {
   const ranked = item.matches
     .filter((match) => {
       const historical = historyById.get(match.historicalId);
       if (!historical?.imageUrl) return false;
-      return hasSameColourFamily(item, historical);
+      return historical.itemType === item.itemType;
     })
-    .map((match) => {
-      const visualAvailable = match.visualScore !== null;
-      const denominator = visualAvailable
-        ? attributeWeight + visualWeight
-        : attributeWeight;
-      const combinedScore = visualAvailable
-        ? (match.attributeScore * attributeWeight +
-            (match.visualScore ?? 0) * visualWeight) /
-          Math.max(denominator, 1)
-        : match.attributeScore;
-      return { ...match, combinedScore };
-    })
+    .map((match) => ({ ...match, combinedScore: match.visualScore ?? 0 }))
     .sort((left, right) => right.combinedScore - left.combinedScore);
-
-  const top = ranked.slice(0, topK);
-  let numerator = 0;
-  let denominator = 0;
-  top.forEach((match) => {
-    const historical = historyById.get(match.historicalId);
-    if (!historical) return;
-    const weight = Math.max(match.combinedScore, 0.01) ** 2;
-    numerator += historical.salesTarget * weight;
-    denominator += weight;
-  });
-
-  const analogueSales = numerator / Math.max(denominator, 0.01);
-  const topScore = top[0]?.combinedScore ?? 0;
-  const averageTop =
-    top.slice(0, 3).reduce((sum, match) => sum + match.combinedScore, 0) /
-    Math.max(top.slice(0, 3).length, 1);
-  const salesIntervalHalfWidth = dataset.meta.model.salesConformalHalfWidth *
-    (1 + Math.max(0, 0.7 - topScore));
-  const issueCount = top.slice(0, 3).reduce((sum, match) => {
-    const historical = historyById.get(match.historicalId);
-    return sum + (historical?.qualityFlags.length ?? 0);
-  }, 0);
+  const displayedCriterion = Math.round(minimumSimilarity * 100);
+  const eligible = ranked.filter(
+    (match) => Math.round(match.combinedScore * 100) >= displayedCriterion,
+  );
+  const selectedMatch = eligible.find((match) => match.historicalId === selectedHistoricalId) ?? eligible[0];
+  const topScore = selectedMatch?.combinedScore ?? 0;
+  const displayedScore = Math.round(topScore * 100);
+  const historical = selectedMatch ? historyById.get(selectedMatch.historicalId) : undefined;
   let matchConfidence: Confidence = "Low";
-  if (
-    topScore >= 0.84 &&
-    averageTop >= 0.72 &&
-    top[0]?.visualScore !== null &&
-    issueCount === 0
-  ) {
+  if (topScore >= 0.84 && selectedMatch?.visualScore !== null && !(historical?.qualityFlags.length)) {
     matchConfidence = "High";
-  } else if (topScore >= 0.62 && averageTop >= 0.52) {
+  } else if (displayedScore >= displayedCriterion && selectedMatch?.visualScore !== null) {
     matchConfidence = "Medium";
   }
-  const topVisualScore = top[0]?.visualScore;
+  const topVisualScore = selectedMatch?.visualScore;
   const noSuitableMatch =
-    !top.length ||
+    !selectedMatch ||
     matchConfidence === "Low" ||
     topVisualScore === null ||
     topVisualScore === undefined ||
-    topVisualScore < dataset.meta.model.minimumVisualScore;
-  const regressionSales = item.recommendation.regressionSales;
-  const blend = dataset.meta.model.regressionBlend;
-  const rawExpectedSales = noSuitableMatch
-    ? regressionSales
-    : analogueSales * (1 - blend) + regressionSales * blend;
-  const expectedSales = clamp(roundPack(rawExpectedSales), 0, 2000);
-  const sellThroughPolicy = Math.max(targetSellThrough / 100, 0.01);
-  const quantity = clamp(
-    roundPack(expectedSales / sellThroughPolicy),
-    100,
-    2000,
-  );
-  const uncertaintyRatio = salesIntervalHalfWidth / Math.max(expectedSales, 1);
-  const demandUncertainty: DemandUncertainty =
-    uncertaintyRatio <= 0.20 ? "Narrow" :
-      uncertaintyRatio <= 0.40 ? "Moderate" : "Wide";
-  const usesValidatedDefault =
-    attributeWeight === Math.round(dataset.meta.model.attributeWeight * 100) &&
-    visualWeight === Math.round(dataset.meta.model.visualWeight * 100) &&
-    targetSellThrough === Math.round(dataset.meta.model.targetSellThrough * 100) &&
-    topK === dataset.meta.model.topK;
-
-  // A previous static artifact may predate the strict server-side family
-  // constraint. Never reuse its forecast if the display safety gate had to
-  // remove candidates; recalculate from the remaining same-family evidence.
-  const historicalVisualCandidates = item.matches.filter((match) => Boolean(historyById.get(match.historicalId)?.imageUrl));
-  const colourFamilyGuardChangedCandidates = ranked.length !== historicalVisualCandidates.length;
-  if (usesValidatedDefault && !colourFamilyGuardChangedCandidates) {
-    return {
-      ranked,
-      quantity: item.recommendation.quantity,
-      low: item.recommendation.low,
-      high: item.recommendation.high,
-      matchConfidence: item.recommendation.matchConfidence,
-      noSuitableMatch: item.recommendation.noSuitableMatch,
-      demandUncertainty: item.recommendation.demandUncertainty,
-      uncertaintyRatio: item.recommendation.uncertaintyRatio,
-      expectedSales: item.recommendation.expectedSales,
-      salesLow: item.recommendation.salesLow,
-      salesHigh: item.recommendation.salesHigh,
-      analogueSales: item.recommendation.analogueSales,
-      regressionSales: item.recommendation.regressionSales,
-      salesIntervalHalfWidth: item.recommendation.salesIntervalHalfWidth,
-      analogueQuantity: item.recommendation.analogueQuantity,
-      regressionQuantity: item.recommendation.regressionQuantity,
-      intervalHalfWidth: item.recommendation.intervalHalfWidth,
-    };
-  }
-
+    displayedScore < displayedCriterion;
+  const expectedSales = noSuitableMatch || !historical
+    ? 0
+    : packRounded(historical.salesTarget);
+  const quantity = noSuitableMatch
+    ? 0
+    : packRounded(expectedSales / Math.max(targetSellThrough, 0.01));
   return {
     ranked,
+    eligible,
+    selectedMatch,
     quantity,
-    low: clamp(roundPack(Math.max(expectedSales - salesIntervalHalfWidth, 0) / sellThroughPolicy), 100, 2000),
-    high: clamp(roundPack((expectedSales + salesIntervalHalfWidth) / sellThroughPolicy), 100, 2000),
+    low: quantity,
+    high: quantity,
     matchConfidence,
     noSuitableMatch,
-    demandUncertainty,
-    uncertaintyRatio,
     expectedSales,
-    salesLow: clamp(roundPack(expectedSales - salesIntervalHalfWidth), 0, 2000),
-    salesHigh: clamp(roundPack(expectedSales + salesIntervalHalfWidth), 0, 2000),
-    analogueSales: roundPack(analogueSales),
-    regressionSales: roundPack(regressionSales),
-    salesIntervalHalfWidth: roundPack(salesIntervalHalfWidth),
-    analogueQuantity: roundPack(analogueSales / sellThroughPolicy),
-    regressionQuantity: roundPack(regressionSales / sellThroughPolicy),
-    intervalHalfWidth: roundPack(salesIntervalHalfWidth / sellThroughPolicy),
+    salesLow: expectedSales,
+    salesHigh: expectedSales,
+    analogueSales: expectedSales,
+    analogueQuantity: noSuitableMatch || !historical ? 0 : packRounded(historical.order),
   };
 }
 
@@ -545,26 +394,13 @@ function MatchAttributeCatalog({
   product: ComparableProduct;
   context: "Upcoming" | "Historical";
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const visibleAttributes = expanded
-    ? catalogAttributeOrder
-    : catalogAttributeOrder.slice(0, 4);
-
   return (
     <section className="match-attribute-catalog" aria-label={`${context} product attributes`}>
       <div className="match-attribute-catalog-heading">
         <small>Product attributes</small>
-        <button
-          type="button"
-          className="catalog-attribute-toggle"
-          aria-expanded={expanded}
-          onClick={() => setExpanded((current) => !current)}
-        >
-          {expanded ? "Show less" : "Show all"}
-        </button>
       </div>
       <dl className="catalog-attribute-grid">
-        {visibleAttributes.map((key) => {
+        {catalogAttributeOrder.map((key) => {
           const value = attributeValue(product, key);
           return (
             <div key={key}>
@@ -573,12 +409,6 @@ function MatchAttributeCatalog({
             </div>
           );
         })}
-        {expanded && (
-          <div className="colour-family-attribute">
-            <dt>Colour family</dt>
-            <dd title={displayedColourFamily(product)}>{displayedColourFamily(product)}</dd>
-          </div>
-        )}
       </dl>
     </section>
   );
@@ -602,20 +432,6 @@ function NoMatchPill() {
   return (
     <span className="no-match-pill">
       No convincing visual match
-    </span>
-  );
-}
-
-function UncertaintyPill({
-  uncertainty,
-  detailed = false,
-}: {
-  uncertainty: DemandUncertainty;
-  detailed?: boolean;
-}) {
-  return (
-    <span className={`uncertainty-pill ${uncertainty.toLowerCase()}`}>
-      {uncertainty} {detailed ? "sales uncertainty" : "uncertainty"}
     </span>
   );
 }
@@ -645,23 +461,27 @@ function App() {
   const [queueSearch, setQueueSearch] = useState("");
   const [segment, setSegment] = useState("All");
   const [matchConfidenceFilter, setMatchConfidenceFilter] = useState("All");
-  const [uncertaintyFilter, setUncertaintyFilter] = useState("All");
-  const [attributeWeight, setAttributeWeight] = useState(Math.round(dataset.meta.model.attributeWeight * 100));
-  const [visualWeight, setVisualWeight] = useState(Math.round(dataset.meta.model.visualWeight * 100));
-  const [targetSellThrough, setTargetSellThrough] = useState(Math.round(dataset.meta.model.targetSellThrough * 100));
-  const [topK, setTopK] = useState(dataset.meta.model.topK);
   const [focusedHistoricalId, setFocusedHistoricalId] = useState<string | null>(null);
+  const [minimumSimilarity, setMinimumSimilarity] = useState(
+    dataset.meta.model.minimumVisualScore,
+  );
+  const [targetSellThrough, setTargetSellThrough] = useState(
+    dataset.meta.model.targetSellThrough ?? 0.70,
+  );
   const [overrides, setOverrides] = useState<Record<string, number>>({});
   const [toast, setToast] = useState("");
 
   const selected = visibleUpcoming.find((item) => item.id === selectedId) ?? initialItem;
   const decision = useMemo(
-    () => makeDecision(selected, attributeWeight, visualWeight, targetSellThrough, topK),
-    [selected, attributeWeight, visualWeight, targetSellThrough, topK],
+    () => makeDecision(
+      selected,
+      minimumSimilarity,
+      targetSellThrough,
+      focusedHistoricalId,
+    ),
+    [selected, minimumSimilarity, targetSellThrough, focusedHistoricalId],
   );
-  const selectedMatches = decision.noSuitableMatch
-    ? []
-    : decision.ranked.slice(0, topK);
+  const selectedMatches = decision.eligible.slice(0, 4);
 
   useEffect(() => {
     if (!toast) return;
@@ -673,9 +493,9 @@ function App() {
     () =>
       visibleUpcoming.map((item) => ({
         item,
-        decision: makeDecision(item, attributeWeight, visualWeight, targetSellThrough, topK),
+        decision: makeDecision(item, minimumSimilarity, targetSellThrough),
       })),
-    [attributeWeight, visualWeight, targetSellThrough, topK],
+    [minimumSimilarity, targetSellThrough],
   );
 
   const queueItems = useMemo(() => {
@@ -693,19 +513,16 @@ function App() {
       return (
         (!query || searchable.includes(query)) &&
         (segment === "All" || item.itemType === segment) &&
-        (matchConfidenceFilter === "All" || itemDecision.matchConfidence === matchConfidenceFilter) &&
-        (uncertaintyFilter === "All" || itemDecision.demandUncertainty === uncertaintyFilter)
+        (matchConfidenceFilter === "All" || itemDecision.matchConfidence === matchConfidenceFilter)
       );
     });
-  }, [portfolio, queueSearch, segment, matchConfidenceFilter, uncertaintyFilter]);
+  }, [portfolio, queueSearch, segment, matchConfidenceFilter]);
 
-  const focusedMatch =
-    selectedMatches.find((match) => match.historicalId === focusedHistoricalId) ??
-    selectedMatches[0];
+  const focusedMatch = decision.selectedMatch;
   const focusedHistory = focusedMatch ? historyById.get(focusedMatch.historicalId) : undefined;
   const finalQuantity = overrides[selected.id] ?? decision.quantity;
 
-  const totalBuy = portfolio.reduce(
+  const totalOrder = portfolio.reduce(
     (sum, { item, decision: itemDecision }) => sum + (overrides[item.id] ?? itemDecision.quantity),
     0,
   );
@@ -715,6 +532,25 @@ function App() {
     setFocusedHistoricalId(null);
     setTab("compare");
     window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function chooseAnalogue(historicalId: string) {
+    setFocusedHistoricalId(historicalId);
+    setOverrides((current) => {
+      const next = { ...current };
+      delete next[selected.id];
+      return next;
+    });
+  }
+
+  function changeMinimumSimilarity(value: number) {
+    setMinimumSimilarity(value);
+    setOverrides({});
+  }
+
+  function changeTargetSellThrough(value: number) {
+    setTargetSellThrough(value);
+    setOverrides({});
   }
 
   function applyOverride(value: number) {
@@ -743,23 +579,12 @@ function App() {
         "Fabric",
         "Product match status",
         "Top historical match",
-        "Combined similarity",
-        "Attribute similarity",
         "Visual AI similarity",
         "Match confidence",
-        "Sales uncertainty",
-        "Uncertainty half-width percentage",
-        "Analogue expected sales",
-        "Machine-learning expected sales",
-        "Expected sales",
-        "Expected sales low",
-        "Expected sales high",
-        "Recommended initial order",
-        "Recommended order low",
-        "Recommended order high",
+        "Matched product sales",
+        "Matched product original order",
         "Planner quantity",
-        "Target sell-through",
-        "Model version",
+        "Recommendation version",
       ],
       ...portfolio.map(({ item, decision: itemDecision }) => {
         const top = itemDecision.noSuitableMatch
@@ -774,22 +599,11 @@ function App() {
           item.fabric,
           itemDecision.noSuitableMatch ? "No product match" : "Matched",
           top?.historicalId ?? "",
-          Math.round((top?.combinedScore ?? 0) * 100),
-          Math.round((top?.attributeScore ?? 0) * 100),
           top?.visualScore === null ? "" : Math.round((top?.visualScore ?? 0) * 100),
           itemDecision.matchConfidence,
-          itemDecision.demandUncertainty,
-          Math.round(itemDecision.uncertaintyRatio * 100),
-          itemDecision.analogueSales,
-          itemDecision.regressionSales,
           itemDecision.expectedSales,
-          itemDecision.salesLow,
-          itemDecision.salesHigh,
           itemDecision.quantity,
-          itemDecision.low,
-          itemDecision.high,
           overrides[item.id] ?? "",
-          targetSellThrough,
           dataset.meta.model.version,
         ];
       }),
@@ -828,7 +642,7 @@ function App() {
           ))}
         </nav>
         <div className="top-actions">
-          <span className="sync-state"><i /> AI model v{dataset.meta.model.version} ready</span>
+          <span className="sync-state"><i /> Recommendations up to date</span>
           <button className="button secondary" onClick={exportCsv}>Export CSV</button>
           <span className="avatar" aria-label="Planner profile">SD</span>
         </div>
@@ -866,12 +680,6 @@ function App() {
                 <option value="Medium">Medium match</option>
                 <option value="Low">No convincing match</option>
               </select>
-              <select value={uncertaintyFilter} onChange={(event) => setUncertaintyFilter(event.target.value)} aria-label="Filter sales uncertainty">
-                <option value="All">All ranges</option>
-                <option value="Narrow">Narrow range</option>
-                <option value="Moderate">Moderate range</option>
-                <option value="Wide">Wide range</option>
-              </select>
             </div>
             <div className="queue-list">
               {queueItems.map(({ item, decision: itemDecision }) => (
@@ -900,9 +708,6 @@ function App() {
                           {itemDecision.matchConfidence} match
                         </span>
                       )}
-                      <span className={`mini-uncertainty ${itemDecision.demandUncertainty.toLowerCase()}`}>
-                        {itemDecision.demandUncertainty} range
-                      </span>
                     </span>
                   </span>
                   <span className="queue-qty">{numberFormatter.format(itemDecision.quantity)}<small>units</small></span>
@@ -915,14 +720,8 @@ function App() {
           <section className="workspace">
             <div className="workspace-heading">
               <div>
-                <span className="eyebrow">Decision workspace / {selected.itemType}</span>
+                <span className="eyebrow">Decision workspace</span>
                 <h1>{selected.id}</h1>
-                <div className="style-tags">
-                  <span>{selected.design}</span>
-                  <span>{selected.categoryType}</span>
-                  <span>{selected.fabric}</span>
-                  <span>{selected.colour}</span>
-                </div>
               </div>
               <div className="workspace-stepper" aria-label="Decision progress">
                 <span className="done">1 <small>Matched</small></span>
@@ -946,18 +745,12 @@ function App() {
               <article className="recommendation-card">
                 <div className="recommendation-topline">
                   <div>
-                    <span className="card-label">AI buy recommendation</span>
-                    <p>
-                      {visualMatchingAvailable
-                        ? "Visual AI retrieval + trained unit-sales forecasting"
-                        : "Real-data attribute retrieval + trained unit-sales forecasting"}
-                    </p>
+                    <span className="card-label">AI order quantity recommendation</span>
                   </div>
                   <div className="signal-pills">
                     {decision.noSuitableMatch
                       ? <NoMatchPill />
                       : <MatchConfidencePill confidence={decision.matchConfidence} detailed />}
-                    <UncertaintyPill uncertainty={decision.demandUncertainty} detailed />
                   </div>
                 </div>
                 <div className="quantity-hero">
@@ -967,122 +760,169 @@ function App() {
                       <strong>{numberFormatter.format(finalQuantity)}</strong>
                       <span>units</span>
                     </div>
-                    <p>Expected sales ÷ {targetSellThrough}% inventory policy</p>
+                    <p>Selected product's sales ÷ {Math.round(targetSellThrough * 100)}% target sell-through</p>
                   </div>
                   <div className="quantity-secondary">
-                    <small>Expected customer sales</small>
+                    <small>Matched product sales</small>
                     <strong>{numberFormatter.format(decision.expectedSales)} units</strong>
-                    <span>80% forecast range {numberFormatter.format(decision.salesLow)}–{numberFormatter.format(decision.salesHigh)}</span>
+                    <span>Cleaned observed sales from the one selected historical product</span>
                   </div>
                 </div>
-                <div className="match-confidence-track" aria-label={`Top historical match score ${scorePercent(decision.ranked[0]?.combinedScore ?? 0)}`}>
-                  <span style={{ width: `${Math.round((decision.ranked[0]?.combinedScore ?? 0) * 100)}%` }} />
+                <div className="match-confidence-row">
+                  <span>Selected analogue similarity</span>
+                  <div className="match-confidence-track" aria-label={`Selected historical match score ${scorePercent(focusedMatch?.combinedScore ?? 0)}`}>
+                    <span style={{ width: `${Math.round((focusedMatch?.combinedScore ?? 0) * 100)}%` }} />
+                  </div>
+                  <strong>{scorePercent(focusedMatch?.combinedScore ?? 0)}</strong>
                 </div>
                 <div className="rationale-box">
                   <span className="rationale-icon">✦</span>
                   <p>
                     {decision.noSuitableMatch ? (
                       <>
-                        No historical product cleared the visual-match guardrail.
-                        The <b>{numberFormatter.format(decision.expectedSales)} unit sales forecast</b> therefore
-                        uses the trained product-attribute model without analogue blending.
+                        No historical product cleared the visual-match threshold. No sales or order quantity is generated; planner review is required.
                       </>
                     ) : (
                       <>
-                        The model forecasts <b>{numberFormatter.format(decision.expectedSales)} sales units</b> independently of inventory policy. The {targetSellThrough}% target converts that forecast into the recommended initial order; changing it does not retrain or alter expected sales.
+                        This single matched product recorded <b>{numberFormatter.format(decision.expectedSales)} cleaned sales units</b>. At a <b>{Math.round(targetSellThrough * 100)}% target sell-through</b>, that implies a starting order of <b>{numberFormatter.format(decision.quantity)} units</b> — confirm with planner judgment below.
                       </>
                     )}
                   </p>
                 </div>
                 <div className="recommendation-metrics">
-                  <div>
-                    <small>Top historical analogue</small>
-                    <strong>{decision.noSuitableMatch ? "No product match" : decision.ranked[0]?.historicalId}</strong>
+                  <div className="analogue-tile">
+                    {!decision.noSuitableMatch && focusedHistory?.imageUrl ? (
+                      <ProductImage src={focusedHistory.imageUrl} alt={`Historical analogue ${focusedHistory.id}`} className="analogue-thumb" />
+                    ) : (
+                      <strong>{decision.noSuitableMatch ? "No accepted product" : focusedMatch?.historicalId}</strong>
+                    )}
                   </div>
-                  <div>
-                    <small>Analogue sales forecast</small>
+                  <div className="metrics-sales">
+                    <small>Historical sales evidence</small>
                     <strong>{decision.noSuitableMatch ? "Not used" : `${numberFormatter.format(decision.analogueSales)} units`}</strong>
                   </div>
-                  <div><small>Machine-learning sales forecast</small><strong>{numberFormatter.format(decision.regressionSales)} units</strong></div>
-                  <div><small>Sales backtest WAPE</small><strong>{scorePercent(dataset.meta.model.backtest.wape)}</strong></div>
+                  <div className="metrics-order"><small>Historical original order</small><strong>{decision.noSuitableMatch ? "Not used" : `${numberFormatter.format(decision.analogueQuantity)} units`}</strong></div>
+                  <div className="override-row">
+                    <label>
+                      Planner quantity
+                      <input
+                        type="number"
+                        min="0"
+                        step="25"
+                        value={finalQuantity}
+                        onChange={(event) => applyOverride(Number(event.target.value))}
+                      />
+                    </label>
+                    <div className="override-actions">
+                      {overrides[selected.id] && <button className="text-button" onClick={resetOverride}>Reset</button>}
+                      <button className="button primary" onClick={() => setToast(`${selected.id} approved at ${numberFormatter.format(finalQuantity)} units`)}>
+                        Approve order
+                      </button>
+                    </div>
+                  </div>
                 </div>
-                <div className="override-row">
-                  <label>
-                    Planner quantity
-                    <input
-                      type="number"
-                      min="0"
-                      step="25"
-                      value={finalQuantity}
-                      onChange={(event) => applyOverride(Number(event.target.value))}
-                    />
-                  </label>
-                  <button className="button primary" onClick={() => setToast(`${selected.id} approved at ${numberFormatter.format(finalQuantity)} units`)}>
-                    Approve buy
-                  </button>
-                  {overrides[selected.id] && <button className="text-button" onClick={resetOverride}>Reset</button>}
-                </div>
+                {focusedHistory && (
+                  <div className="workbook-audit-panel">
+                    <div className="workbook-audit-heading">
+                      <div>
+                        <span>Attribute reference</span>
+                      </div>
+                      <span className="analogue-count-chip">Not used in matching</span>
+                    </div>
+                    <div className="attribute-evidence-legend">
+                      <span>Upcoming</span>
+                      <i aria-hidden="true">→</i>
+                      <span>Historical</span>
+                    </div>
+                    <div className="attribute-evidence">
+                      {catalogAttributeOrder.map((key) => {
+                        const upcomingValue = attributeValue(selected, key);
+                        const historicalValue = attributeValue(focusedHistory, key);
+                        const matchStatus = attributeMatchStatus(upcomingValue, historicalValue);
+                        return (
+                          <div className="attribute-comparison" key={key}>
+                            <div className="attribute-comparison-heading">
+                              <span>{attributeLabels[key] ?? key}</span>
+                              <strong className={`attribute-match-status ${matchStatus}`}>
+                                {matchStatus === "exact" ? "Exact match" : "Different"}
+                              </strong>
+                            </div>
+                            <div className="attribute-value-pair">
+                              <span title={upcomingValue}>{upcomingValue}</span>
+                              <i aria-hidden="true">→</i>
+                              <span title={historicalValue}>{historicalValue}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
               </article>
 
               <aside className="settings-card">
                 <div className="card-label-row">
-                  <span className="card-label">Decision settings</span>
+                  <span className="card-label">Decision policy</span>
                   <span className="live-chip">Live</span>
                 </div>
                 <label className="range-control">
-                  <span><b>Attribute weight</b><strong>{attributeWeight}%</strong></span>
-                  <input type="range" min={visualMatchingAvailable ? 10 : 100} max={visualMatchingAvailable ? 90 : 100} value={attributeWeight} disabled={!visualMatchingAvailable} onChange={(event) => {
-                    const value = Number(event.target.value);
-                    setAttributeWeight(value);
-                    setVisualWeight(100 - value);
-                  }} />
+                  <span><b>Minimum visual similarity</b><strong>{scorePercent(minimumSimilarity)}</strong></span>
+                  <input
+                    type="range"
+                    min="10"
+                    max="90"
+                    step="1"
+                    value={Math.round(minimumSimilarity * 100)}
+                    onChange={(event) => changeMinimumSimilarity(Number(event.target.value) / 100)}
+                    aria-label="Minimum visual similarity"
+                  />
+                  <small className="setting-help">The selected analogue must meet this score before it can drive an order.</small>
                 </label>
                 <label className="range-control">
-                  <span><b>Visual weight</b><strong>{visualWeight}%</strong></span>
-                  <input type="range" min={visualMatchingAvailable ? 10 : 0} max={visualMatchingAvailable ? 90 : 0} value={visualWeight} disabled={!visualMatchingAvailable} onChange={(event) => {
-                    const value = Number(event.target.value);
-                    setVisualWeight(value);
-                    setAttributeWeight(100 - value);
-                  }} />
+                  <span><b>Target sell-through</b><strong>{Math.round(targetSellThrough * 100)}%</strong></span>
+                  <input
+                    type="range"
+                    min="10"
+                    max="90"
+                    step="1"
+                    value={Math.round(targetSellThrough * 100)}
+                    onChange={(event) => changeTargetSellThrough(Number(event.target.value) / 100)}
+                    aria-label="Target sell-through"
+                  />
+                  <small className="setting-help">Recommended order = selected product sales ÷ target sell-through, rounded to packs of 25.</small>
                 </label>
-                <label className="range-control">
-                  <span><b>Inventory strategy</b><strong>{targetSellThrough}% ST</strong></span>
-                  <input type="range" min="50" max="90" value={targetSellThrough} onChange={(event) => setTargetSellThrough(Number(event.target.value))} />
-                  <small className="setting-help">Adjusts the recommended order, not the AI sales forecast.</small>
-                </label>
-                <label className="select-control analogue-count-control">
-                  <span>
-                    <b>Products used in recommendation</b>
-                    <strong>
-                      {decision.noSuitableMatch
-                        ? "0 — visual guardrail active"
-                        : topK === dataset.meta.model.topK
-                          ? "Validated default"
-                          : "Custom scenario"}
-                    </strong>
-                  </span>
-                  <select aria-label="Products used in recommendation" value={topK} onChange={(event) => {
-                    setTopK(Number(event.target.value));
-                    setFocusedHistoricalId(null);
-                  }}>
-                    <option value="3">3 closest products</option>
-                    <option value="5">5 closest products</option>
-                    <option value="8">8 closest products</option>
-                  </select>
-                  <small>
-                    {decision.noSuitableMatch
-                      ? "Weak candidates are excluded; the forecast does not use a historical analogue."
-                      : "Every selected product is shown below and contributes to the quantity calculation."}
-                  </small>
-                </label>
-                <div className="method-note">
-                  <span>{visualMatchingAvailable ? "Visual AI + demand intelligence" : "Attribute + demand intelligence"}</span>
-                  <p>
-                    {visualMatchingAvailable
-                      ? "Fashion-domain visual embeddings, validation-selected matching, a trained sales model, and data-calibrated uncertainty."
-                      : "Seven real-data product attributes, temporal validation, a trained sales model, and data-calibrated uncertainty. Image matching activates after identifier mapping."}
-                  </p>
-                </div>
+                {focusedHistory && focusedMatch ? (
+                  <aside className="evidence-summary" aria-label="Similarity score summary">
+                    <div className="evidence-summary-heading">
+                      <span>Similarity scores</span>
+                      <small>Higher is closer</small>
+                    </div>
+                    <div className="evidence-scores evidence-scores-overall">
+                      <ScoreRing score={focusedMatch.combinedScore} label="Overall match" />
+                    </div>
+                    <div className="evidence-scores evidence-scores-components">
+                      <ScoreRing score={focusedMatch.colourVisualScore ?? 0} label="Colour" />
+                      <ScoreRing score={focusedMatch.dinoVisualScore ?? 0} label="Pattern" />
+                      <ScoreRing score={focusedMatch.fashionVisualScore ?? 0} label="Style" />
+                      <ScoreRing score={focusedMatch.textureVisualScore ?? 0} label="Texture" />
+                    </div>
+                    <p>
+                      {visualMatchingAvailable
+                        ? `Ranked by how closely the product photos match in style, colour and pattern.${selected.itemType === "OTTR" ? " For trousers, only the garment is compared — footwear in the photo is ignored." : ""} Attribute details like fabric or category aren't used to rank.`
+                        : "No visual match is available for this product yet."}
+                    </p>
+                  </aside>
+                ) : (
+                  <aside className="evidence-summary evidence-summary-empty" aria-label="Similarity score summary">
+                    <div className="evidence-summary-heading">
+                      <span>Similarity scores</span>
+                    </div>
+                    <p>
+                      <span aria-hidden="true">∅</span>
+                      No historical product cleared the visual-match threshold, so there is no similarity score to show.
+                    </p>
+                  </aside>
+                )}
               </aside>
             </div>
 
@@ -1090,76 +930,79 @@ function App() {
               <div className="section-heading">
                 <div>
                   <span className="eyebrow">
-                    {decision.noSuitableMatch
-                      ? "Visual match guardrail"
-                      : "Ranked historical analogues"}
+                    Recommended historical analogues
                   </span>
                   <h2>
-                    {decision.noSuitableMatch
-                      ? "No convincing product match found"
-                      : "Why these styles are relevant"}
+                    Select one product to calculate the order quantity
                   </h2>
-                  <p className="section-supporting-copy">
-                    {decision.noSuitableMatch
-                      ? `The best visual candidate did not meet the ${scorePercent(dataset.meta.model.minimumVisualScore)} minimum and is not used as sales evidence.`
-                      : `Showing all ${topK} products used in this recommendation, selected from ${dataset.meta.historicalItems} eligible historical records.`}
-                  </p>
+                  {decision.noSuitableMatch && (
+                    <p className="section-supporting-copy">
+                      {decision.ranked.length === 0
+                        ? "No candidate survived the visual colour and pattern gates."
+                        : `No candidate meets the ${scorePercent(minimumSimilarity)} criterion. Lower the criterion to reveal weaker matches.`}
+                    </p>
+                  )}
                 </div>
                 <div className="analogue-header-tools">
-                  <span className={`analogue-count-chip ${decision.noSuitableMatch ? "rejected" : ""}`}>
-                    {decision.noSuitableMatch ? "0 used" : `${topK} used`}
-                  </span>
-                  <div className="score-legend">
-                    <span><i className="attr" /> Attribute</span>
-                    {visualMatchingAvailable && <span><i className="visual" /> Visual AI</span>}
+                  {decision.noSuitableMatch && (
+                    <span className="analogue-count-chip rejected">0 accepted</span>
+                  )}
+                  <div className="score-legend" title="Ranked by visual similarity in colour, pattern, style and texture">
+                    <span><i className="visual" /> Visual AI similarity</span>
                   </div>
                 </div>
               </div>
-              {decision.noSuitableMatch ? (
+              {selectedMatches.length === 0 ? (
                 <div className="no-product-match-state" role="status">
                   <span aria-hidden="true">∅</span>
                   <div>
-                    <strong>No historical product is shown</strong>
+                    <strong>{decision.ranked.length === 0 ? "No gated visual candidate is available" : `No candidate meets the ${scorePercent(minimumSimilarity)} criterion`}</strong>
                     <p>
-                      The nearest candidates remain below the visual confidence
-                      threshold. The buy forecast uses the trained
-                      product-attribute model and a wide uncertainty range.
+                      {decision.ranked.length === 0
+                        ? "No historical image passed the visual colour and pattern gates."
+                        : "Lower the minimum visual similarity to reveal weaker candidates."}
+                      {" "}No sales or order quantity is generated.
                     </p>
                   </div>
                 </div>
               ) : (
-                <div className={`match-grid match-grid-${topK}`}>
+                <div className="match-grid match-grid-4">
                   {selectedMatches.map((match, index) => {
                     const historical = historyById.get(match.historicalId);
                     if (!historical) return null;
                     return (
                       <article
                         key={match.historicalId}
-                        className={`match-card ${focusedMatch?.historicalId === match.historicalId ? "active" : ""}`}
+                        className={`match-card ${focusedMatch?.historicalId === match.historicalId ? "active" : ""} ${Math.round(match.combinedScore * 100) < Math.round(minimumSimilarity * 100) ? "below-threshold" : ""}`}
                       >
                         <button
                           type="button"
                           className="match-card-select"
-                          aria-label={`Select ${historical.id} for match evidence`}
-                          onClick={() => setFocusedHistoricalId(match.historicalId)}
+                          aria-label={`Select ${historical.id} for order quantity recommendation`}
+                          onClick={() => chooseAnalogue(match.historicalId)}
                         >
                           <span className="rank">#{index + 1}</span>
                           <ProductImage src={historical.imageUrl} alt={historical.id} className="match-image" />
                           <div className="match-copy">
                             <div className="match-title"><strong>{historical.id}</strong><span>{scorePercent(match.combinedScore)}</span></div>
-                            <small>{historical.season} · {historical.design} · {historical.colour}</small>
+                            {Math.round(match.combinedScore * 100) < Math.round(minimumSimilarity * 100) && <small className="threshold-note">Below current similarity criterion</small>}
                             <div className="dual-bars">
-                              <span><i style={{ width: `${match.attributeScore * 100}%` }} /></span>
                               <span><i style={{ width: `${(match.visualScore ?? 0) * 100}%` }} /></span>
+                            </div>
+                            <div className="match-selection-status">
+                              {focusedMatch?.historicalId === match.historicalId
+                                ? "Selected for order recommendation"
+                                : "Select this analogue"}
                             </div>
                           </div>
                         </button>
                         <div className="match-card-catalog">
-                          <MatchAttributeCatalog product={historical} context="Historical" />
                           <div className="match-performance">
                             <span><small>Order</small><strong>{numberFormatter.format(historical.order)}</strong></span>
+                            <span><small>Sales</small><strong>{numberFormatter.format(historical.salesTarget)}</strong></span>
                             <span><small>Sell-through</small><strong>{scorePercent(historical.sellThrough)}</strong></span>
                           </div>
+                          <MatchAttributeCatalog key={historical.id} product={historical} context="Historical" />
                         </div>
                       </article>
                     );
@@ -1168,84 +1011,6 @@ function App() {
               )}
             </section>
 
-            {focusedHistory && focusedMatch && (
-              <section className="evidence-panel" aria-label={`${selected.id} compared with ${focusedHistory.id}`}>
-                <div className="evidence-header">
-                  <div className="evidence-intro">
-                    <span className="eyebrow">Match evidence</span>
-                    <h2>Why this analogue matched</h2>
-                    <p>
-                      {visualMatchingAvailable
-                        ? "The overall similarity combines structured product attributes with deep visual similarity. Review every scored field below before using this historical style as sales evidence."
-                        : "The current similarity uses the seven comparable fields in the real workbooks. Review every scored field below before using this historical style as sales evidence."}
-                    </p>
-                    <div className="evidence-product-pair">
-                      <div className="evidence-product-card">
-                        <ProductImage src={selected.imageUrl} alt={`Upcoming ${selected.id}`} className="evidence-product-image" />
-                        <span>
-                          <small>Upcoming style</small>
-                          <strong>{selected.id}</strong>
-                          <b>{selected.design} · {selected.colour}</b>
-                        </span>
-                      </div>
-                      <i className="evidence-pair-arrow" aria-hidden="true">↔</i>
-                      <div className="evidence-product-card">
-                        <ProductImage src={focusedHistory.imageUrl} alt={`Historical ${focusedHistory.id}`} className="evidence-product-image" />
-                        <span>
-                          <small>Historical analogue</small>
-                          <strong>{focusedHistory.id}</strong>
-                          <b>{focusedHistory.design} · {focusedHistory.colour}</b>
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  <aside className="evidence-summary" aria-label="Similarity score summary">
-                    <div className="evidence-summary-heading">
-                      <span>Similarity scores</span>
-                      <small>Higher is closer</small>
-                    </div>
-                    <div className="evidence-scores">
-                      <ScoreRing score={focusedMatch.combinedScore} label="Overall" />
-                      <ScoreRing score={focusedMatch.attributeScore} label="Attributes" />
-                      {visualMatchingAvailable && <ScoreRing score={focusedMatch.visualScore ?? 0} label="Image" />}
-                    </div>
-                    <p>
-                      {visualMatchingAvailable
-                        ? "The image score combines FashionSigLIP, multi-scale body DINOv2, masked garment colour and texture evidence; mismatched checks, stripes and prints are rejected before ranking. The overall score uses the selected attribute and visual weights."
-                        : "Image scoring is disabled because the supplied filenames do not map to the SS27 identifiers; the overall score is attribute-only."}
-                    </p>
-                  </aside>
-                </div>
-                <div className="evidence-attribute-heading">
-                  <div>
-                    <span>Attribute-by-attribute comparison</span>
-                    <p>Upcoming value versus historical value across all {Object.keys(focusedMatch.attributeBreakdown).length} active matching fields.</p>
-                  </div>
-                  <small>Exact, related, partial or different</small>
-                </div>
-                <div className="attribute-evidence">
-                  {Object.entries(focusedMatch.attributeBreakdown).map(([key, value]) => {
-                    const upcomingValue = attributeValue(selected, key);
-                    const historicalValue = attributeValue(focusedHistory, key);
-                    return (
-                      <div className="attribute-comparison" key={key}>
-                        <div className="attribute-comparison-heading">
-                          <span>{attributeLabels[key] ?? key}</span>
-                          <strong className={`attribute-match-status ${attributeMatchTone(value)}`}>
-                            {attributeMatchLabel(value)} <small>{scorePercent(value)}</small>
-                          </strong>
-                        </div>
-                        <div className="attribute-value-pair">
-                          <span title={upcomingValue}><small>Upcoming</small><b>{upcomingValue}</b></span>
-                          <i aria-hidden="true">→</i>
-                          <span title={historicalValue}><small>Historical</small><b>{historicalValue}</b></span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
-            )}
           </section>
         </div>
       )}
@@ -1253,7 +1018,7 @@ function App() {
       {tab === "portfolio" && (
         <section className="portfolio-page page-wrap">
           <div className="page-heading">
-            <div><span className="eyebrow">Upcoming assortment</span><h1>Portfolio recommendation</h1><p>Review expected sales, analogue evidence, uncertainty and recommended initial orders across the complete {dataset.meta.upcomingSeason} workbook.</p></div>
+            <div><span className="eyebrow">Upcoming assortment</span><h1>Portfolio recommendation</h1><p>Review expected sales, analogue evidence, uncertainty and recommended initial orders across the complete {dataset.meta.upcomingSeason} assortment.</p></div>
             <button className="button primary" onClick={exportCsv}>Export recommendation file</button>
           </div>
           <div className="kpi-grid">
@@ -1263,8 +1028,8 @@ function App() {
               <strong>{visualMatchingAvailable ? scorePercent(dataset.meta.upcomingImageCoverage / dataset.meta.upcomingItems) : "Pending mapping"}</strong>
               <small>{visualMatchingAvailable ? `${dataset.meta.missingUpcomingImages.length} linked-image exceptions` : "Attribute-only recommendations active"}</small>
             </article>
-            <article><span>Temporal holdout WAPE</span><strong>{scorePercent(dataset.meta.model.backtest.wape)}</strong><small>MAE {numberFormatter.format(dataset.meta.model.backtest.mae)} units</small></article>
-            <article className="accent"><span>Recommended buy</span><strong>{numberFormatter.format(totalBuy)}</strong><small>units across {dataset.meta.upcomingSeason}</small></article>
+            <article><span>Single-match decisions</span><strong>{portfolio.filter(({ decision }) => !decision.noSuitableMatch).length}</strong><small>accepted visual analogues</small></article>
+            <article className="accent"><span>Recommended order</span><strong>{numberFormatter.format(totalOrder)}</strong><small>units across {dataset.meta.upcomingSeason}</small></article>
           </div>
           <div className="portfolio-toolbar">
             <label className="search-box wide"><span>⌕</span><input value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} placeholder="Search item, design, colour, category type or fabric" /></label>
@@ -1273,12 +1038,11 @@ function App() {
               {productSegments.map((itemType) => <option key={itemType}>{itemType}</option>)}
             </select>
             <select value={matchConfidenceFilter} onChange={(event) => setMatchConfidenceFilter(event.target.value)} aria-label="Filter portfolio match confidence"><option value="All">All matches</option><option value="High">High match</option><option value="Medium">Medium match</option><option value="Low">No convincing match</option></select>
-            <select value={uncertaintyFilter} onChange={(event) => setUncertaintyFilter(event.target.value)} aria-label="Filter portfolio sales uncertainty"><option value="All">All ranges</option><option value="Narrow">Narrow range</option><option value="Moderate">Moderate range</option><option value="Wide">Wide range</option></select>
             <span>{queueItems.length} results</span>
           </div>
           <div className="portfolio-table-wrap">
             <table className="portfolio-table">
-              <thead><tr><th>Upcoming style</th><th>Product attributes</th><th>Top historical analogue</th><th>Match score</th><th>Decision signals</th><th>Expected sales</th><th>Recommended buy</th><th>Planner buy</th><th><span className="sr-only">Actions</span></th></tr></thead>
+              <thead><tr><th>Upcoming style</th><th>Product attributes</th><th>Top historical analogue</th><th>Match score</th><th>Decision signals</th><th>Expected sales</th><th>Recommended order</th><th>Planner order</th><th><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>
                 {queueItems.map(({ item, decision: itemDecision }) => {
                   const top = itemDecision.noSuitableMatch
@@ -1298,14 +1062,14 @@ function App() {
                       </td>
                       <td>
                         {top ? (
-                          <><strong className="match-score">{scorePercent(top.combinedScore)}</strong><small>Attr {scorePercent(top.attributeScore)} · Visual {scorePercent(top.visualScore)}</small></>
+                          <><strong className="match-score">{scorePercent(top.combinedScore)}</strong><small>100% visual</small></>
                         ) : (
                           <><strong className="no-match-table-label">Below threshold</strong><small>Candidate suppressed</small></>
                         )}
                       </td>
-                      <td><div className="table-signals">{itemDecision.noSuitableMatch ? <NoMatchPill /> : <MatchConfidencePill confidence={itemDecision.matchConfidence} detailed />}<UncertaintyPill uncertainty={itemDecision.demandUncertainty} detailed /></div></td>
-                      <td><strong>{numberFormatter.format(itemDecision.expectedSales)}</strong><small>{numberFormatter.format(itemDecision.salesLow)}–{numberFormatter.format(itemDecision.salesHigh)} forecast</small></td>
-                      <td><strong>{numberFormatter.format(itemDecision.quantity)}</strong><small>{numberFormatter.format(itemDecision.low)}–{numberFormatter.format(itemDecision.high)}</small></td>
+                      <td><div className="table-signals">{itemDecision.noSuitableMatch ? <NoMatchPill /> : <MatchConfidencePill confidence={itemDecision.matchConfidence} detailed />}</div></td>
+                      <td><strong>{numberFormatter.format(itemDecision.expectedSales)}</strong><small>selected product actual</small></td>
+                      <td><strong>{numberFormatter.format(itemDecision.quantity)}</strong><small>sales ÷ {Math.round(targetSellThrough * 100)}% ST</small></td>
                       <td><strong>{overrides[item.id] ? numberFormatter.format(overrides[item.id]) : "—"}</strong><small>{overrides[item.id] ? "Adjusted" : "Pending"}</small></td>
                       <td><button className="row-action" onClick={() => chooseItem(item.id)}>Review →</button></td>
                     </tr>
@@ -1320,25 +1084,24 @@ function App() {
       {tab === "method" && (
         <section className="method-page page-wrap">
           <div className="page-heading method-heading">
-            <div><span className="eyebrow">AI with measurable evidence</span><h1>How model v{dataset.meta.model.version} reaches a recommendation</h1><p>A real-workbook product-matching and learned sales-forecasting workflow with temporal validation, uncertainty, data guardrails, and planner control.</p></div>
+            <div><span className="eyebrow">Visual evidence only</span><h1>How model v{dataset.meta.model.version} reaches a recommendation</h1><p>The top four visual analogues are shown for review; exactly one selected product supplies sales evidence for the order quantity.</p></div>
             <div className="poc-badge"><span>AI v{dataset.meta.model.version}</span><small>Real data · {dataset.meta.upcomingSeason}</small></div>
           </div>
           <div className="workflow-grid">
             {[
               ["01", "Audit inputs", "Map both workbook schemas, remove constant or non-comparable fields, link images, and quarantine inconsistent outcome values."],
               ["02", "Retrieve visual analogues", dataset.meta.visionModel.reranker
-                ? `FashionSigLIP retrieves the top ${dataset.meta.visionModel.reranker.candidateCount} same-item, same-design and same-colour-family candidates with ${dataset.meta.visionModel.reranker.candidateIndex?.engine ?? "exact vector search"}; multi-scale body DINOv2 gates mismatched patterns, then garment-masked CIELAB colour and texture rerank the eligible visual detail before structured evidence is combined.`
+                ? `FashionSigLIP retrieves the top ${dataset.meta.visionModel.reranker.candidateCount} same-item-type candidates with ${dataset.meta.visionModel.reranker.candidateIndex?.engine ?? "exact vector search"}; dominant garment palettes use perceptual CIEDE2000 distance to reject visible colour mismatches, multi-scale DINO verifies pattern detail, and the remaining candidates are ranked using 100% visual evidence. Every OTTR visual stage uses a fixed waist-to-lower-leg trouser crop that excludes footwear, with hard pattern rejection limited to checks, prints, stripes and dobby/structure.`
                 : `Create ${dataset.meta.attributeAudit.activeCount}-field structured evidence and compare mapped product images.`],
-              ["03", "Learn retrieval", "Use a forward season holdout and parameter search to tune neighbour count, forecast blend, and regularization."],
-              ["04", "Forecast unit sales", "Ensemble similarity-weighted historical sales with a trained, regularized machine-learning forecast."],
-              ["05", "Convert forecast to a buy", "Keep expected sales independent, apply the sell-through inventory policy, then enforce pack and quantity limits."],
+              ["03", "Select one product", `Review the top four and use only the clicked analogue when it clears the tunable visual threshold.`],
+              ["04", "Use its observed outcome", "Copy cleaned sales and original order from that single historical product. If there is no accepted match, return zero and require manual review."],
             ].map(([number, title, copy]) => <article key={number}><span>{number}</span><h3>{title}</h3><p>{copy}</p></article>)}
           </div>
           <section className="attribute-audit-card">
             <div className="attribute-audit-heading">
               <div>
                 <span className="card-label">Workbook attribute audit</span>
-                <h2>{dataset.meta.attributeAudit.activeCount} informative fields retained</h2>
+              <h2>Workbook fields are not matched</h2>
                 <p>{dataset.meta.attributeAudit.policy}</p>
               </div>
               <span className="audit-range">Historical {dataset.meta.attributeAudit.historicalSourceRange}<br />Upcoming {dataset.meta.attributeAudit.upcomingSourceRange}</span>
@@ -1346,7 +1109,7 @@ function App() {
             <div className="active-attribute-grid">
               {dataset.meta.attributeAudit.activeAttributes.map((attribute) => (
                 <article key={attribute.key}>
-                  <div><b>{attribute.label}</b><strong>{scorePercent(attribute.weight)}</strong></div>
+                  <div><b>{attribute.label}</b><strong>Audit only</strong></div>
                   <p>{attribute.historicalColumn} ↔ {attribute.upcomingColumn}</p>
                   <small>{attribute.method}</small>
                   <span>{attribute.historicalUnique} historical · {attribute.upcomingUnique} upcoming values</span>
@@ -1379,59 +1142,49 @@ function App() {
           <div className="method-columns">
             <article className="formula-card">
               <span className="card-label">Decision formula</span>
-              <h2>Readable enough to challenge</h2>
+              <h2>Single-analogue policy</h2>
               <div className="formula">
                 <p>Match score</p>
                 <strong>
-                  {visualMatchingAvailable
-                    ? `${attributeWeight}% × Attribute + ${visualWeight}% × Visual AI`
-                    : "100% comparable workbook attributes · Visual AI pending ID mapping"}
+                  {visualMatchingAvailable ? "100% Visual AI" : "No recommendation until an image is available"}
                 </strong>
               </div>
               <div className="formula">
                 <p>Match confidence</p>
-                <strong>Top match strength + top-3 consistency + image availability + analogue data quality</strong>
+                <strong>Single top visual score + image availability + historical outcome quality</strong>
               </div>
               <div className="formula">
-                <p>Historical training target</p>
-                <strong>Observed unit sales, capped by the strongest supply record only when sales exceed available supply</strong>
+                <p>Sales evidence</p>
+                <strong>Cleaned observed sales from the single accepted historical visual analogue</strong>
               </div>
               <div className="formula">
-                <p>Expected sales forecast</p>
-                <strong>{Math.round((1 - dataset.meta.model.regressionBlend) * 100)}% analogue sales + {Math.round(dataset.meta.model.regressionBlend * 100)}% machine-learning sales forecast</strong>
+                <p>Order evidence</p>
+                <strong>Selected analogue sales ÷ target sell-through, rounded to a 25-unit pack</strong>
               </div>
               <div className="formula">
-                <p>Recommended initial order</p>
-                <strong>Expected sales ÷ {targetSellThrough}% target sell-through, rounded to 25-unit packs</strong>
-              </div>
-              <div className="formula">
-                <p>Sales uncertainty</p>
-                <strong>Narrow ≤ ±20% · Moderate ≤ ±40% · Wide &gt; ±40% of expected sales</strong>
-              </div>
-              <div className="formula">
-                <p>Forecast and order ranges</p>
-                <strong>80% conformal sales interval, then sell-through conversion, 25-unit packs and 100–2,000 order guardrails</strong>
+                <p>No-match behavior</p>
+                <strong>Zero system quantity and mandatory planner review</strong>
               </div>
             </article>
             <article className="readiness-card">
-              <span className="card-label">Model validation</span>
-              <h2>What is measured</h2>
+              <span className="card-label">Policy validation</span>
+              <h2>What is enforced</h2>
               <ul>
-                <li><b>{scorePercent(dataset.meta.model.backtest.wape)} WAPE</b> in the {dataset.meta.model.validationRows}-row temporal holdout</li>
-                <li><b>{numberFormatter.format(dataset.meta.model.backtest.mae)} units</b> mean absolute error</li>
-                <li><b>{scorePercent(dataset.meta.model.backtest.intervalCoverage)}</b> empirical interval coverage</li>
+                <li><b>Top three visual analogues</b> are reviewable, but only one contributes</li>
+                <li><b>No attribute score</b> is calculated or blended</li>
+                <li><b>No regression model</b> predicts sales or order quantity</li>
                 <li><b>{dataset.meta.dataQuality.dispatchAboveOrder + dataset.meta.dataQuality.salesAboveDispatch}</b> order/dispatch/sales anomalies contained by guardrails</li>
               </ul>
-              <div className="warning-note">{dataset.meta.model.evaluation}. The model remains a pilot because only two historical seasons are available; three to five clean seasons are still recommended for production approval.</div>
+              <div className="warning-note">A visual match transfers historical evidence; it is not a statistical demand forecast. Planner approval remains required.</div>
             </article>
           </div>
           <div className="upgrade-table">
             <div><span>Layer</span><b>Real-data pilot now</b><b>Future production roadmap</b></div>
             <div><span>Visual representation</span><p>{dataset.meta.imageMappingStatus}</p><p>Client-tuned visual image/text embedding service; domain tuning awaits reviewed pairs</p></div>
-            <div><span>Retrieval</span><p>Attribute scoring against {dataset.meta.historicalItems} historical records; top eight retained per upcoming product</p><p>Metadata-filtered vector search followed by learned re-ranking</p></div>
-            <div><span>Quantity logic</span><p>Sales forecast from a validation-tuned analogue and regularized machine-learning ensemble; buy derived from sell-through policy</p><p>Temporal P10/P50/P90 forecasting with hierarchical reconciliation</p></div>
-            <div><span>Decision signals</span><p>Separate match confidence and sales uncertainty labels</p><p>Relevance calibration plus category-level temporal forecast uncertainty</p></div>
-            <div><span>Uncertainty</span><p>Out-of-fold conformal expected-sales range</p><p>Temporal quantiles calibrated by category, channel and region</p></div>
+            <div><span>Retrieval</span><p>Same-item-type visual search; top four products retained for selection</p><p>Metadata-filtered vector search followed by reviewed visual re-ranking</p></div>
+            <div><span>Quantity logic</span><p>Selected product sales divided by tunable target sell-through</p><p>Optional demand forecasting can be reconsidered only with client approval</p></div>
+            <div><span>Decision signals</span><p>Visual match confidence only</p><p>Planner feedback and reviewed match labels</p></div>
+            <div><span>Uncertainty</span><p>No statistical range is claimed</p><p>Future ranges require a separately approved forecasting model</p></div>
             <div><span>Workflow</span><p>Browser-session planner override</p><p>Planned durable jobs, feedback capture, model registry and recommendation audit</p></div>
             <div><span>Data</span><p>{dataset.meta.historicalItems} historical / {dataset.meta.upcomingItems} upcoming real records</p><p>3–5 seasons plus inventory and markdown context</p></div>
           </div>

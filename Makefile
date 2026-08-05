@@ -13,7 +13,7 @@ data:
 	PYTHONPATH=$(BACKEND_PYTHONPATH) $(PYTHON) -m data_pipeline.prepare_real_data
 
 data-vision:
-	PYTHONPATH=$(BACKEND_PYTHONPATH) $(PYTHON) -m data_pipeline.prepare_real_data --with-vision
+	PYTHONPATH=$(BACKEND_PYTHONPATH) $(PYTHON) -m data_pipeline.prepare_real_data --with-vision --verbose --log-file tmp/data-vision-progress.log
 
 qdrant:
 	docker compose -f docker-compose.qdrant.yml up -d

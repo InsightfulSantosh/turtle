@@ -79,6 +79,29 @@ def test_processed_datasets_are_written_below_data_processed(
     assert all(row["Canonical schema applied"] == "True" for row in validation)
 
 
+def test_current_historical_workbook_layout_is_normalized() -> None:
+    source = {
+        "IMAGE ID": "OTSH-23850-1001",
+        "SEGMENT1": "OTSH",
+        "SEGMENT2": 23850,
+        "SEGMENT3": 1001,
+        "COLOR_NAME": "PINK",
+        "SELL THROUGH": 0.5,
+        "WEEKLY SELL THROUGH": 0.02,
+    }
+
+    normalized = RealDataPipeline._normalize_historical_source_layout([source])[0]
+
+    assert normalized["CON"] == "OTSH-23850-1001"
+    assert normalized["ITEM TYPE"] == "OTSH"
+    assert normalized["SORT"] == 23850
+    assert normalized["COLOR"] == 1001
+    assert normalized["COLOR__2"] == "PINK"
+    assert normalized["SELL THR"] == 0.5
+    assert normalized["WKLY SELL THRU"] == 0.02
+    assert not set(source) & set(normalized)
+
+
 def test_catalogue_images_are_mapped_by_source_identifier(
     tmp_path: Path,
 ) -> None:
@@ -147,3 +170,78 @@ def test_item_type_scope_keeps_only_requested_catalogue_items(tmp_path: Path) ->
         "historicalItems": 1,
         "upcomingItems": 1,
     }
+
+
+def test_preview_sample_is_deterministic_and_covers_every_stratum(tmp_path: Path) -> None:
+    settings = PipelineSettings(
+        data_root=tmp_path / "DATA",
+        temporary_root=tmp_path / "tmp",
+        output_path=tmp_path / "artifact.json",
+    )
+    upcoming = [
+        {
+            "id": f"{item_type}-{category}-{index}",
+            "itemType": item_type,
+            "categoryType": category,
+            "imageUrl": f"/upcoming/{item_type}-{category}-{index}",
+        }
+        for item_type, category, count in [
+            ("OTGL", "FORMAL", 8),
+            ("OTJK", "CASUAL", 6),
+            ("OTSH", "FORMAL", 4),
+            ("OTSH", "CASUAL", 2),
+        ]
+        for index in range(count)
+    ]
+    source = {
+        "meta": {"upcomingImageCoverage": len(upcoming)},
+        "historical": [{"id": "historical-1"}],
+        "upcoming": upcoming,
+    }
+
+    first = RealDataPipeline(settings)._sample_upcoming_catalogue(source, 10, 27)
+    second = RealDataPipeline(settings)._sample_upcoming_catalogue(source, 10, 27)
+
+    assert [item["id"] for item in first["upcoming"]] == [
+        item["id"] for item in second["upcoming"]
+    ]
+    assert len(first["upcoming"]) == 10
+    assert {
+        (item["itemType"], item["categoryType"])
+        for item in first["upcoming"]
+    } == {
+        ("OTGL", "FORMAL"),
+        ("OTJK", "CASUAL"),
+        ("OTSH", "FORMAL"),
+        ("OTSH", "CASUAL"),
+    }
+    assert first["historical"] is source["historical"]
+    assert first["meta"]["previewSample"] is True
+    assert first["meta"]["previewSampleSize"] == 10
+    assert first["meta"]["fullUpcomingItems"] == 20
+    assert sum(
+        row["sampleItems"] for row in first["meta"]["previewStrata"]
+    ) == 10
+
+
+def test_preview_sample_rejects_a_size_too_small_for_all_strata(tmp_path: Path) -> None:
+    settings = PipelineSettings(
+        data_root=tmp_path / "DATA",
+        temporary_root=tmp_path / "tmp",
+        output_path=tmp_path / "artifact.json",
+    )
+    source = {
+        "meta": {"upcomingImageCoverage": 2},
+        "historical": [],
+        "upcoming": [
+            {"id": "OTGL-1", "itemType": "OTGL", "categoryType": "FORMAL"},
+            {"id": "OTJK-1", "itemType": "OTJK", "categoryType": "CASUAL"},
+        ],
+    }
+
+    try:
+        RealDataPipeline(settings)._sample_upcoming_catalogue(source, 1, 27)
+    except ValueError as error:
+        assert "cannot cover all 2" in str(error)
+    else:
+        raise AssertionError("Expected a preview sample smaller than the strata count to fail")

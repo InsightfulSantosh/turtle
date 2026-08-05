@@ -8,7 +8,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse
 
-import numpy as np
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from fashion_matching.models import ManifestRecord, PreparedImage
@@ -28,15 +27,12 @@ class ImagePreprocessor:
     max_pixels: int = 40_000_000
     minimum_dimension: int = 32
     pad_to_square: bool = True
-    crop_uniform_background: bool = False
     allowed_image_domains: tuple[str, ...] = ()
 
     def prepare(self, record: ManifestRecord) -> PreparedImage:
         data = self._load_bytes(record)
         checksum = hashlib.sha256(data).hexdigest()
         image = self._decode(data)
-        if self.crop_uniform_background:
-            image = self._crop_background(image)
         if self.pad_to_square:
             image = self._pad_square(image)
         return PreparedImage(
@@ -162,34 +158,3 @@ class ImagePreprocessor:
         canvas = Image.new("RGB", (side, side), "white")
         canvas.paste(image, (left, top))
         return canvas
-
-    @staticmethod
-    def _crop_background(image: Image.Image) -> Image.Image:
-        array = np.asarray(image, dtype=np.int16)
-        corners = np.stack(
-            [
-                array[0, 0],
-                array[0, -1],
-                array[-1, 0],
-                array[-1, -1],
-            ]
-        )
-        background = np.median(corners, axis=0)
-        distance = np.max(np.abs(array - background), axis=2)
-        foreground = distance > 18
-        y, x = np.where(foreground)
-        if not len(x):
-            return image
-        left, right = int(x.min()), int(x.max()) + 1
-        top, bottom = int(y.min()), int(y.max()) + 1
-        foreground_area = (right - left) * (bottom - top)
-        if foreground_area < image.width * image.height * 0.02:
-            return image
-        margin = max(round(max(image.size) * 0.03), 2)
-        box = (
-            max(left - margin, 0),
-            max(top - margin, 0),
-            min(right + margin, image.width),
-            min(bottom + margin, image.height),
-        )
-        return image.crop(box)

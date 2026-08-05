@@ -43,6 +43,7 @@ class DecisionSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     targetSellThrough: float = Field(default=0.70, ge=0.50, le=0.90)
+    minimumSimilarity: float = Field(default=0.50, ge=0.10, le=0.90)
 
 
 class RecommendationRequest(BaseModel):
@@ -155,7 +156,7 @@ def existing_recommendation(item_id: str) -> dict:
         "productId": item_id,
         "modelVersion": RUNTIME.model["version"],
         "recommendation": item["recommendation"],
-        "matches": ([] if no_suitable_match else item["matches"][: int(RUNTIME.model["topK"])]),
+        "matches": item["matches"][: int(RUNTIME.model["topK"])],
         "warnings": warnings,
     }
 
@@ -166,5 +167,6 @@ def create_recommendation(payload: RecommendationRequest) -> dict:
     return RUNTIME.recommend(
         product,
         target_sell_through=payload.settings.targetSellThrough,
+        minimum_visual_score=payload.settings.minimumSimilarity,
         visual_similarities=payload.product.visualSimilarities,
     )

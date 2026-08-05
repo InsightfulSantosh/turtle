@@ -2,21 +2,13 @@ from __future__ import annotations
 
 import json
 
-import numpy as np
-
 from core.config import paths
 from machine_learning.model import (
-    attribute_similarity,
     blend_hybrid_visual_scores,
     blend_two_stage_visual_scores,
-    build_model_artifact,
     calibrate_vision,
-    demand_features,
-    demand_uncertainty,
-    fit_demand_pipeline,
     match_confidence,
     no_suitable_product_match,
-    normalized_demand,
     recommend_one,
     sales_target,
 )
@@ -27,347 +19,92 @@ def test_vision_calibration_is_monotonic() -> None:
     assert calibration.similarity(0.15) > calibration.similarity(0.50) > calibration.similarity(0.90)
 
 
-def test_two_stage_visual_blend_never_falls_back_to_dino_without_fashion_candidate() -> None:
+def test_visual_blends_use_only_image_signals() -> None:
     assert blend_two_stage_visual_scores(None, 1.0, 0.75) is None
     assert blend_two_stage_visual_scores(0.8, None, 0.75) == 0.8
-    assert blend_two_stage_visual_scores(0.8, 0.4, 0.25) == 0.7
-
-
-def test_hybrid_visual_blend_renormalizes_when_an_appearance_signal_is_missing() -> None:
-    score = blend_hybrid_visual_scores(
+    assert blend_hybrid_visual_scores(
         0.8,
         0.6,
         0.5,
         None,
         0.5,
         {"neural": 0.7, "colour": 0.2, "texture": 0.1},
-    )
-    assert score == 0.6556
+    ) == 0.6556
 
 
-def test_two_stage_artifact_does_not_allow_dino_to_add_unshortlisted_products() -> None:
-    def product(identifier: str, item_type: str, sales: int) -> dict[str, object]:
-        return {
-            "id": identifier,
-            "sourceId": identifier.removeprefix("AW25-"),
-            "itemType": item_type,
-            "design": "CHECKS",
-            "categoryType": "CASUAL",
-            "fabric": "COTTON",
-            "colour": "BLUE",
-            "season": "AW25",
-            "order": sales + 50,
-            "dispatch": sales + 25,
-            "sales": sales,
-            "sellThrough": 0.7,
-            "imageUrl": f"/product-images/historical/{identifier}",
-            "hasVisualFeature": True,
-        }
-
-    history = [
-        product("AW25-OTSH-1", "OTSH", 300),
-        product("AW25-OTSH-2", "OTSH", 350),
-        product("AW25-OTTR-3", "OTTR", 500),
-    ]
-    source = {
-        "historical": history,
-        "upcoming": [
-            {
-                **product("OTSH-QUERY", "OTSH", 0),
-                "id": "OTSH-QUERY",
-                "sourceId": None,
-                "imageUrl": "/product-images/upcoming/OTSH-QUERY",
-            },
-            {
-                **product("OTSH-NO-CANDIDATE", "OTSH", 0),
-                "id": "OTSH-NO-CANDIDATE",
-                "sourceId": None,
-                "design": "STRIPES",
-                "imageUrl": "/product-images/upcoming/OTSH-NO-CANDIDATE",
-            },
-        ],
-    }
-    pairs = []
-    for left_id, right_id, fashion, dino in (
-        ("AW25-OTSH-1", "AW25-OTSH-1", 0.0, 0.0),
-        ("AW25-OTSH-1", "AW25-OTSH-2", 0.2, 0.4),
-        ("AW25-OTSH-2", "AW25-OTSH-1", 0.2, 0.4),
-        ("AW25-OTSH-2", "AW25-OTSH-2", 0.0, 0.0),
-        ("AW25-OTTR-3", "AW25-OTTR-3", 0.0, 0.0),
-        ("OTSH-QUERY", "AW25-OTSH-1", 0.1, 0.3),
-        ("OTSH-QUERY", "AW25-OTSH-2", 0.2, 0.2),
-    ):
-        pairs.append(
-            {
-                "leftId": left_id,
-                "rightId": right_id,
-                "fashionDistance": fashion,
-                "dinoDistance": dino,
-                "candidateRank": 1,
-            }
-        )
-    artifact = build_model_artifact(
-        source,
-        {
-            "engine": "two-stage test",
-            "modelId": "test/fashion",
-            "modelRevision": "test",
-            "embeddingDimension": 3,
-            "historicalCoverage": 3,
-            "upcomingCoverage": 1,
-            "reranker": {"modelId": "test/dino", "weightGrid": [0.0, 0.5, 1.0]},
-            "candidatePairs": pairs,
-        },
-    )
-
-    matches = artifact["upcoming"][0]["matches"]
-    assert {match["historicalId"] for match in matches} == {"AW25-OTSH-1", "AW25-OTSH-2"}
-    no_candidate = artifact["upcoming"][1]
-    assert no_candidate["matches"] == []
-    assert no_candidate["recommendation"]["noSuitableMatch"] is True
-    assert artifact["meta"]["visionModel"]["reranker"]["modelId"] == "test/dino"
-
-
-def test_category_mismatch_is_strongly_penalized() -> None:
-    base = {
-        "itemType": "OTSH",
-        "design": "CHECKS",
-        "categoryType": "FORMAL",
-        "fabric": "100% Cotton",
-        "colour": "BLUE",
-    }
-    same = dict(base)
-    different = dict(base, itemType="OTTS")
-    assert attribute_similarity(base, same)[0] == 1.0
-    assert attribute_similarity(base, different)[0] < 0.5
-
-
-def test_only_five_approved_attributes_are_compared() -> None:
-    left = {
-        "itemType": "OTSH",
-        "design": "CHECKS",
-        "categoryType": "FORMAL",
-        "fabric": "100% Cotton",
-        "colour": "BLUE",
-        "season": "AW25",
-    }
-    _, breakdown = attribute_similarity(left, dict(left, season="SS27"))
-    assert set(breakdown) == {
-        "item",
-        "design",
-        "category_type",
-        "fabric",
-        "colour",
-    }
-
-
-def test_only_five_approved_attributes_are_sent_to_demand_pipeline() -> None:
-    features = demand_features(
-        {
-            "itemType": "OTSH",
-            "design": "CHECKS",
-            "categoryType": "FORMAL",
-            "fabric": "COTTON",
-            "colour": "BLUE",
-            "season": "AW25",
-        }
-    )
-    assert set(features) == {
-        "item_type=OTSH",
-        "design=CHECKS",
-        "category_type=FORMAL",
-        "colour=BLUE",
-        "fabric=COTTON",
-    }
-
-
-def test_sales_target_contains_bad_sales_row() -> None:
+def test_sales_target_caps_impossible_sales() -> None:
     item = {"order": 400, "dispatch": 390, "sales": 900, "sellThrough": 2.3}
     assert sales_target(item) == 400
-    assert normalized_demand(item) == 400 / 0.70
 
 
-def test_demand_model_uses_sklearn_pipeline() -> None:
-    rows = [
-        {
-            "itemType": "OTSH",
-            "design": "CHECKS",
-            "categoryType": "FORMAL",
-            "fabric": "COTTON",
-            "colour": "BLUE",
-        },
-        {
-            "itemType": "OTSH",
-            "design": "PLAINS",
-            "categoryType": "CASUAL",
-            "fabric": "LINEN",
-            "colour": "WHITE",
-        },
-        {
-            "itemType": "OTTS",
-            "design": "PRINTS",
-            "categoryType": "CASUAL",
-            "fabric": "COTTON",
-            "colour": "BLACK",
-        },
+def test_confidence_uses_one_visual_product() -> None:
+    assert match_confidence([0.90], has_visual=True, issue_count=0) == "High"
+    assert match_confidence([0.50], has_visual=True, issue_count=0) == "Medium"
+    assert match_confidence([0.4954], has_visual=True, issue_count=0) == "Medium"
+    assert match_confidence([0.49], has_visual=True, issue_count=0) == "Low"
+    assert no_suitable_product_match([{"visualScore": 0.49}], "Medium")
+    assert not no_suitable_product_match([{"visualScore": 0.70}], "Medium")
+
+
+def test_single_visual_analogue_supplies_sales_and_sell_through_buy() -> None:
+    history = [
+        {"id": "AW25-OTTR-1", "order": 625, "dispatch": 600, "sales": 525, "sellThrough": 0.875},
+        {"id": "AW25-OTTR-2", "order": 900, "dispatch": 850, "sales": 800, "sellThrough": 0.94},
     ]
-    pipeline = fit_demand_pipeline(rows, np.asarray([500.0, 350.0, 200.0]), alpha=1.0)
-    assert list(pipeline.named_steps) == ["features", "scale", "ridge"]
-    assert np.isfinite(pipeline.predict([rows[0]])[0])
+    matches = [
+        {"historicalId": "AW25-OTTR-1", "visualScore": 0.70, "hybridScore": 0.70},
+        {"historicalId": "AW25-OTTR-2", "visualScore": 0.69, "hybridScore": 0.69},
+    ]
+    result = recommend_one({}, history, matches, {"topK": 3})
+    assert result["expectedSales"] == 525
+    assert result["quantity"] == 750
+    assert result["analogueSales"] == 525
+    assert result["analogueQuantity"] == 625
+    assert result["targetSellThrough"] == 0.70
+    assert result["evidencePolicy"] == "single_top_visual_analogue"
+    assert "regressionSales" not in result
 
 
-def test_match_confidence_is_separate_from_demand_uncertainty() -> None:
-    assert match_confidence([0.90, 0.80, 0.75], has_visual=True, issue_count=0) == "High"
-    assert demand_uncertainty(quantity=650, interval_half_width=325) == "Wide"
-
-
-def test_weak_visual_candidates_are_rejected() -> None:
-    assert no_suitable_product_match(
-        [{"visualScore": 0.49}],
-        "Medium",
-    )
-    assert no_suitable_product_match(
-        [{"visualScore": 0.90}],
-        "Low",
-    )
-    assert not no_suitable_product_match(
-        [{"visualScore": 0.70}],
-        "Medium",
-    )
+def test_no_visual_match_returns_manual_review_zeroes() -> None:
+    result = recommend_one({}, [], [], {"topK": 3})
+    assert result["noSuitableMatch"] is True
+    assert result["expectedSales"] == 0
+    assert result["quantity"] == 0
 
 
 def test_generated_artifact_contract() -> None:
     data = json.loads(paths.model_artifact.read_text(encoding="utf-8"))
-    assert data["meta"]["model"]["version"] == "4.2.0"
-    assert data["meta"]["dataMode"] == "real"
-    assert data["meta"]["upcomingSeason"] == "SS27"
-    assert data["meta"]["model"]["demandLibrary"] == "scikit-learn"
-    assert data["meta"]["visualMethod"] == (
-        "Two-stage FashionSigLIP candidate retrieval with DINOv2, Grounding DINO + SAM 2 "
-        "garment masking, masked CIELAB colour and texture visual-detail reranking"
-    )
-    assert data["meta"]["visionModel"]["modelId"] == "Marqo/marqo-fashionSigLIP"
-    assert data["meta"]["visionModel"]["embeddingDimension"] == 768
-    reranker = data["meta"]["visionModel"]["reranker"]
-    assert reranker["modelId"] == "facebook/dinov2-base"
-    assert reranker["embeddingDimension"] == 768
-    assert reranker["candidateCount"] == 30
-    assert reranker["sameItemTypeConstraint"] is True
-    assert "sameDesignConstraint" not in reranker
-    assert data["meta"]["model"]["dinoRerankWeight"] == 0.5
-    assert reranker["weightGrid"] == [0.5]
-    assert reranker["candidateIndex"]["metric"].startswith("inner-product")
-    assert reranker["appearance"]["segmentation"]["method"] == "grounding-dino-sam2-with-adaptive-background-fallback"
-    assert reranker["appearance"]["weights"] == {"neural": 0.7, "colour": 0.2, "texture": 0.1}
-    assert data["meta"]["visionModel"]["historicalCoverage"] == data["meta"]["historicalImageCoverage"] == 508
-    assert data["meta"]["visionModel"]["upcomingCoverage"] == data["meta"]["upcomingImageCoverage"] == 36
-    assert (
-        data["meta"]["visionCalibration"]["servingMedianDistance"]
-        > (data["meta"]["visionCalibration"]["historicalMedianDistance"])
-    )
-    assert data["meta"]["model"]["trainingRows"] == len(data["historical"])
-    assert data["meta"]["model"]["modelSelection"] == "Temporal holdout + ParameterGrid"
-    assert data["meta"]["model"]["minimumVisualScore"] == 0.50
-    assert data["meta"]["model"]["minimumMatchConfidence"] == "Medium"
-    assert data["meta"]["model"]["validationRows"] > 0
-    assert len(data["historical"]) == 665
-    assert len(data["upcoming"]) == 1_752
-    assert data["meta"]["dataQuality"]["zeroSalesHistoricalRowsExcluded"] == 142
-    assert data["meta"]["dataQuality"]["upcomingRowsExcludedUnseenItem"] == 114
-    assert all(item["salesTarget"] > 0 for item in data["historical"])
-    assert all(item["itemType"] != "OTJT" for item in data["upcoming"])
-    assert data["meta"]["attributeAudit"]["activeCount"] == 5
-    assert set(data["meta"]["model"]["attributeWeights"]) == {
-        "item",
-        "design",
-        "category_type",
-        "fabric",
-        "colour",
-    }
-    assert data["meta"]["attributeAudit"]["excludedConstants"] == []
-    assert 0 <= data["meta"]["model"]["backtest"]["wape"] <= 1
-    assert data["meta"]["model"]["forecastTarget"] == "Cleaned positive historical unit sales"
-    assert len(data["upcoming"]) == data["meta"]["upcomingItems"]
-    for item in data["upcoming"]:
-        assert "mrp" not in item
-        recommendation = item["recommendation"]
-        assert recommendation["confidence"] == recommendation["matchConfidence"]
-        assert isinstance(recommendation["noSuitableMatch"], bool)
-        if recommendation["noSuitableMatch"]:
-            assert recommendation["expectedSales"] == recommendation["regressionSales"]
-        assert recommendation["demandUncertainty"] in {"Narrow", "Moderate", "Wide"}
-        assert recommendation["low"] <= recommendation["quantity"] <= recommendation["high"]
-        assert recommendation["salesLow"] <= recommendation["expectedSales"] <= recommendation["salesHigh"]
-        assert recommendation["quantity"] % 25 == 0
-        assert recommendation["expectedSales"] % 25 == 0
-        assert len(item["matches"]) == 8
-        assert all(
-            set(match["attributeBreakdown"]) == {"item", "design", "category_type", "fabric", "colour"}
-            for match in item["matches"]
-        )
-        assert all(0 <= match["attributeScore"] <= 1 for match in item["matches"])
-        if item["imageUrl"]:
-            assert item["hasVisualFeature"] is True
-            assert all(match["visualScore"] is not None for match in item["matches"])
-            assert all(match["fashionVisualScore"] is not None for match in item["matches"])
-            assert all(match["dinoVisualScore"] is not None for match in item["matches"])
-            assert all(match["colourVisualScore"] is not None for match in item["matches"])
-            assert all(match["textureVisualScore"] is not None for match in item["matches"])
-        else:
-            assert item["hasVisualFeature"] is False
-            assert all(match["visualScore"] is None for match in item["matches"])
-            assert all(match["fashionVisualScore"] is None for match in item["matches"])
-            assert all(match["dinoVisualScore"] is None for match in item["matches"])
-            assert all(match["colourVisualScore"] is None for match in item["matches"])
-            assert all(match["textureVisualScore"] is None for match in item["matches"])
-        assert "design" in item
-        assert "categoryType" in item
-        assert "pattern" not in item
-        assert "fit" not in item
-        assert "lifecycle" not in item
-    history_by_id = {item["id"]: item for item in data["historical"]}
-    image_backed_upcoming = [item for item in data["upcoming"] if item["imageUrl"]]
-    assert image_backed_upcoming
-    assert any(not item["recommendation"]["noSuitableMatch"] for item in image_backed_upcoming)
-    assert all(
-        item["matches"][0]["visualScore"] >= data["meta"]["model"]["minimumVisualScore"]
-        for item in image_backed_upcoming
-        if not item["recommendation"]["noSuitableMatch"]
-    )
-    assert all("mrp" not in item for item in data["historical"])
-    assert all(
-        history_by_id[match["historicalId"]]["imageUrl"] for item in data["upcoming"] for match in item["matches"]
-    )
-
+    expected_upcoming = 200 if data["meta"].get("previewSample") else 5_550
     model = data["meta"]["model"]
-    history = data["historical"]
-    targets = np.asarray([float(item["salesTarget"]) for item in history])
-    pipeline = fit_demand_pipeline(history, targets, float(model["ridgeAlpha"]))
-    representative = data["upcoming"][0]
-    reproduced = recommend_one(
-        representative,
-        history,
-        representative["matches"],
-        targets,
-        pipeline,
-        model,
-    )
-    assert reproduced["quantity"] == representative["recommendation"]["quantity"]
-    assert reproduced["expectedSales"] == representative["recommendation"]["expectedSales"]
-    assert reproduced["matchConfidence"] == representative["recommendation"]["matchConfidence"]
-    assert reproduced["noSuitableMatch"] == representative["recommendation"]["noSuitableMatch"]
-    assert reproduced["demandUncertainty"] == representative["recommendation"]["demandUncertainty"]
 
-    stricter_inventory_policy = dict(model, targetSellThrough=0.80)
-    policy_scenario = recommend_one(
-        representative,
-        history,
-        representative["matches"],
-        targets,
-        pipeline,
-        stricter_inventory_policy,
-    )
-    assert policy_scenario["expectedSales"] == reproduced["expectedSales"]
-    assert policy_scenario["salesLow"] == reproduced["salesLow"]
-    assert policy_scenario["salesHigh"] == reproduced["salesHigh"]
-    assert policy_scenario["quantity"] != reproduced["quantity"]
+    assert model["version"] == "5.1.0"
+    assert model["evidencePolicy"] == "single_top_visual_analogue"
+    assert model["noMachineLearningForecast"] is True
+    assert model["noAttributeMatching"] is True
+    assert model["topK"] == 4
+    assert model["targetSellThrough"] == 0.70
+    assert model["minimumVisualScore"] == 0.5
+    assert "demandPipeline" not in model
+    assert "regressionBlend" not in model
+    assert "attributeWeight" not in model
+    assert "backtest" not in model
+    assert data["meta"]["attributeAudit"]["activeCount"] == 0
+    assert len(data["historical"]) == 665
+    assert len(data["upcoming"]) == expected_upcoming
+
+    history_by_id = {item["id"]: item for item in data["historical"]}
+    for item in data["upcoming"]:
+        recommendation = item["recommendation"]
+        assert len(item["matches"]) <= 4
+        assert all("attributeScore" not in match for match in item["matches"])
+        assert all("attributeBreakdown" not in match for match in item["matches"])
+        if recommendation["noSuitableMatch"]:
+            assert recommendation["expectedSales"] == 0
+            assert recommendation["quantity"] == 0
+            continue
+        historical = history_by_id[item["matches"][0]["historicalId"]]
+        assert round(item["matches"][0]["visualScore"] * 100) >= round(model["minimumVisualScore"] * 100)
+        expected_sales = min(round(float(historical["salesTarget"]) / 25) * 25, 2_000)
+        expected_order = min(round(expected_sales / 0.70 / 25) * 25, 2_000)
+        assert recommendation["expectedSales"] == expected_sales
+        assert recommendation["quantity"] == expected_order

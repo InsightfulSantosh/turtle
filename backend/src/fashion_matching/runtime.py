@@ -21,7 +21,6 @@ def build_preprocessor(settings: MatchingSettings) -> ImagePreprocessor:
         max_pixels=settings.max_image_pixels,
         minimum_dimension=settings.min_image_dimension,
         pad_to_square=settings.pad_to_square,
-        crop_uniform_background=settings.crop_uniform_background,
         allowed_image_domains=settings.allowed_image_domains,
     )
 
