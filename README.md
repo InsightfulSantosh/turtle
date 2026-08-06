@@ -31,9 +31,12 @@ turtle/
 │   │   ├── fashion_matching/          Visual retrieval, encoding and image validation
 │   │   └── machine_learning/          Analogue similarity and predictive demand models
 │   └── tests/                         Backend unit and contract tests
+├── .env.example                       Template for local/deployment environment variables
 ├── requirements.txt                   Single source of truth for backend dependencies
 ├── pyproject.toml                     Backend package, pytest and ruff configuration
-└── Makefile                           Central developer commands
+├── Makefile                           Central developer commands
+├── FASHION_MATCHING.md                Visual retrieval workflow deep dive
+└── Business_Process_Document_AI_Order_Quantity_Tool.pdf   Source business requirements
 ```
 
 The dependency direction is intentional:

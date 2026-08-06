@@ -380,14 +380,17 @@ def _candidate_calibration_values(
 def build_model_artifact(
     source: dict[str, Any],
     vision_output: dict[str, Any],
-    *,
-    demand_forecast: bool = False,
 ) -> dict[str, Any]:
-    """Build the frontend artifact.
+    """Build the frontend artifact using the pooled predictive demand estimator.
 
-    ``demand_forecast`` switches the buy from the legacy copy-one-analogue rule
-    to the pooled predictive estimator. It is off by default so the shipped
-    artifact only changes when that policy change is deliberately made.
+    Per-item, ``recommend_one`` still falls back to the legacy copy-one-analogue
+    rule whenever a product has no accepted visual analogue to pool from — that
+    fallback is a property of the evidence available for that item, not a
+    switch. There used to be a whole-artifact ``demand_forecast`` flag that
+    could disable pooling everywhere; it defaulted to off, which meant the
+    artifact people actually rely on only existed when someone remembered to
+    pass a flag. Removed rather than fixed, since the off state was never
+    the intended behavior.
     """
 
     history = [dict(item) for item in source["historical"]]
@@ -524,13 +527,12 @@ def build_model_artifact(
 
     # Priors are fitted once from the whole historical catalogue, before any
     # upcoming product is scored, so every buy shares one auditable prior.
-    demand_priors = fit_demand_priors(history) if demand_forecast else None
-    if demand_priors is not None:
-        annotate_history_rates(history, demand_priors)
+    demand_priors = fit_demand_priors(history)
+    annotate_history_rates(history, demand_priors)
     # Data-derived sanity ceiling per item type, replacing the flat MAX_BUY
     # fallback — see BuyCeilings for why a single constant cannot be right
     # for every item type on this catalogue.
-    buy_ceilings = fit_buy_ceilings(history) if demand_forecast else None
+    buy_ceilings = fit_buy_ceilings(history)
     match_confidence_counts = {"High": 0, "Medium": 0, "Low": 0}
     all_visual_scores: list[float] = []
     retrieval_history = [historical for historical in history if historical.get("imageUrl")] or history

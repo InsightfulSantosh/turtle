@@ -68,11 +68,12 @@ production rebuild, just as for the primary encoder.
 
 ## Installation
 
-Python 3.12 is required. Install the matching extras into the existing virtual
+Python 3.12 is required. All fashion-matching dependencies are included in
+`requirements.txt` at the repository root (see the root [README.md](README.md) Setup
+section). Copy the environment template into the existing virtual
 environment:
 
 ```bash
-.venv/bin/pip install -r backend/requirements-fashion-matching.txt
 cp .env.example .env
 set -a
 source .env
@@ -267,8 +268,7 @@ Normal tests use a deterministic lightweight encoder and do not download model
 weights:
 
 ```bash
-cd backend
-PYTHONPATH=src ../.venv/bin/python -m pytest -q
+PYTHONPATH=backend/src .venv/bin/python -m pytest -q
 ```
 
 Real model and Qdrant smoke tests should run separately in a GPU/integration
