@@ -4,7 +4,6 @@ import math
 
 import pytest
 
-from domain.contracts import product_text
 from fashion_matching.scoring import (
     SignalWeights,
     attribute_similarity,
@@ -54,17 +53,3 @@ def test_score_validation_and_attribute_matching() -> None:
             {"image": 1.1},
             SignalWeights(),
         )
-
-
-def test_product_text_contains_only_descriptive_values() -> None:
-    assert product_text({"id": "SECRET-SKU"}) == ""
-    assert (
-        product_text(
-            {
-                "id": "SECRET-SKU",
-                "colour": "navy",
-                "fabric": "cotton",
-            }
-        )
-        == "cotton | navy"
-    )

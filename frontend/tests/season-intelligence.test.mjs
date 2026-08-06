@@ -99,10 +99,62 @@ test("keeps the pooled predictive forecast contract intact", async () => {
     copies.length / recommended.length < 0.25,
     `forecast still copies the analogue for ${copies.length}/${recommended.length} products`,
   );
+  // analogueSales is an observed historical fact, not a forecast — it must
+  // never be capped, even for the catalogue's biggest historical sellers.
   assert.ok(recommended.every(({ matches, recommendation }) => {
     const historical = historyById.get(matches[0].historicalId);
-    return recommendation.analogueSales === Math.min(Math.round(historical.salesTarget / 25) * 25, 2000);
-  }), "analogue sales must still report the selected analogue's own cleaned sales");
+    return recommendation.analogueSales === Math.round(historical.salesTarget / 25) * 25;
+  }), "analogue sales must still report the selected analogue's own cleaned sales, uncapped");
+
+  // mean (expectedSales) vs median: the reported "775 forecast next to a 300
+  // order looks like a bug" case. medianDemand must always be present and,
+  // for at least one real product, meaningfully below the mean — proving the
+  // skew this exists to explain actually occurs in the shipped artifact, not
+  // just in a synthetic test.
+  assert.ok(recommended.every(({ recommendation }) => (
+    typeof recommendation.demand.medianDemand === "number"
+    && recommendation.demand.medianDemand <= recommendation.expectedSales
+    && recommendation.demand.skewRatio >= 1
+    && typeof recommendation.demand.wideUncertainty === "boolean"
+  )));
+  const flagged = recommended.filter(({ recommendation }) => recommendation.demand.wideUncertainty);
+  assert.ok(flagged.length > 0, "no product exercised the wide-uncertainty path in this artifact");
+  assert.ok(flagged.every(({ recommendation }) => (
+    recommendation.demand.medianDemand < recommendation.expectedSales
+    // Both can saturate at that item type's buy ceiling and round to the
+    // same displayed value even though the underlying median is genuinely
+    // lower — the ceiling is now per item type, not a flat 2,000.
+    || recommendation.expectedSales >= recommendation.buyCeiling
+  )), "wideUncertainty must correspond to the mean actually sitting above the median");
+
+  // Buy ceilings are data-derived per item type, not a flat constant — a
+  // single 2,000-unit cap cannot be right when this catalogue's own
+  // per-item-type historical maxima span ~150 to ~6,700 units. Assert that
+  // spread actually exists in the shipped artifact.
+  assert.ok(model.buyCeilings, "artifact must publish the fitted buy ceilings");
+  assert.ok(model.buyCeilings.globalCeiling > 0);
+  const ceilingValues = Object.values(model.buyCeilings.byItemType);
+  assert.ok(new Set(ceilingValues).size > 1, "every item type got the same ceiling; the cap isn't data-derived");
+  assert.ok(Math.max(...ceilingValues) / Math.min(...ceilingValues) > 3, "ceilings should reflect the real spread");
+
+  // quantityCapped/highCapped must be present and self-consistent: a capped
+  // number is always exactly that product's own item-type ceiling, not an
+  // approximation and not the old flat constant.
+  assert.ok(recommended.every(({ recommendation, itemType }) => {
+    const expectedCeiling = model.buyCeilings.byItemType[itemType] ?? model.buyCeilings.globalCeiling;
+    return typeof recommendation.quantityCapped === "boolean"
+      && typeof recommendation.highCapped === "boolean"
+      && recommendation.buyCeiling === Math.round(expectedCeiling)
+      && (!recommendation.quantityCapped || recommendation.quantity === recommendation.buyCeiling)
+      && (!recommendation.highCapped || recommendation.high === recommendation.buyCeiling);
+  }));
+  const highCappedOnly = recommended.filter(
+    ({ recommendation }) => recommendation.highCapped && !recommendation.quantityCapped,
+  );
+  assert.ok(
+    highCappedOnly.length > 0,
+    "no product in this artifact exercises the high-capped-but-not-quantity-capped path",
+  );
 
   assert.match(pageSource, /Minimum visual similarity/);
   assert.match(pageSource, /Target sell-through/);
@@ -111,6 +163,12 @@ test("keeps the pooled predictive forecast contract intact", async () => {
   assert.match(pageSource, /const eligible = ranked\.filter/);
   assert.match(pageSource, /function newsvendorOrder/);
   assert.match(pageSource, /function forecastDemand/);
+  assert.match(pageSource, /wideUncertainty/);
+  assert.match(pageSource, /medianDemand/);
+  assert.match(pageSource, /quantityCapped/);
+  assert.match(pageSource, /highCapped/);
+  assert.match(pageSource, /function ceilingFor/);
+  assert.match(pageSource, /packRoundedUncapped/);
   assert.doesNotMatch(pageSource, /Attribute weight|Inventory strategy|Machine-learning sales forecast|Sales backtest WAPE/);
   assert.doesNotMatch(pageSource, /colourFamily|Colour family/);
 });

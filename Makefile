@@ -1,10 +1,7 @@
 PYTHON := .venv/bin/python
 BACKEND_PYTHONPATH := backend/src
 
-.PHONY: backend-api backend-test data data-vision fashion-evaluate fashion-index fashion-match frontend-build frontend-dev frontend-test qdrant test
-
-backend-api:
-	PYTHONPATH=$(BACKEND_PYTHONPATH) $(PYTHON) -m uvicorn --app-dir backend api.main:app --host 0.0.0.0 --port 8080
+.PHONY: backend-test data data-vision fashion-evaluate fashion-index fashion-match frontend-build frontend-dev frontend-test qdrant test
 
 backend-test:
 	cd backend && PYTHONPATH=src ../$(PYTHON) -m pytest -q

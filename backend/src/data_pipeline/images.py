@@ -38,9 +38,3 @@ def attach_catalog_images(
         item["hasVisualFeature"] = False
         matched += image_path is not None
     return matched
-
-
-def resolve_catalog_image(image_directory: Path, identifier: str) -> Path | None:
-    """Resolve one product image by identifier without accepting a filesystem path."""
-
-    return build_image_index(image_directory).get(identifier.upper())

@@ -42,11 +42,24 @@ type DemandModel = {
   minimumLogSigma: number;
   maximumLogSigma: number;
   censorSellThrough: number;
-  minimumGroupRows: number;
+  groupShrinkageRows: number;
   maximumAnalogues: number;
   wideUncertaintyEffectiveN: number;
   wideUncertaintySkewRatio: number;
+  /** Scales the lognormal skew correction for the point forecast: 1.0 is the
+   * full mean, 0.0 the median. See DemandPolicy.point_estimate_skew. */
+  pointEstimateSkew: number;
   groups: Record<string, DemandPrior>;
+};
+
+/** Data-derived, per-item-type sanity cap — see BuyCeilings in demand.py for
+ * why a flat constant cannot be right for every item type (this catalogue's
+ * own historical maxima span ~44x, from ~150 to ~6,700 units). */
+type BuyCeilings = {
+  byItemType: Record<string, number>;
+  globalCeiling: number;
+  multiplier: number;
+  floor: number;
 };
 
 type Match = {
@@ -187,6 +200,7 @@ type Dataset = {
       topK: number;
       /** Present only when the artifact was built with the predictive estimator. */
       demandModel?: DemandModel;
+      buyCeilings?: BuyCeilings;
     };
   };
   historical: HistoricalItem[];
@@ -201,6 +215,11 @@ type Decision = {
   quantity: number;
   low: number;
   high: number;
+  /** True when the buy ceiling truncated the model's own solve — a policy
+   * limit, not evidence the target sell-through was actually reached. */
+  quantityCapped: boolean;
+  highCapped: boolean;
+  buyCeiling: number;
   matchConfidence: Confidence;
   noSuitableMatch: boolean;
   expectedSales: number;
@@ -267,8 +286,50 @@ function scorePercent(value: number | null) {
   return value === null ? "N/A" : `${Math.round(value * 100)}%`;
 }
 
-function packRounded(value: number) {
-  return Math.max(0, Math.min(2000, Math.round(value / 25) * 25));
+// Fallback only, for callers with no data-derived ceiling available (the
+// legacy-formula edge case before any artifact ever carried buyCeilings).
+// The live predictive path uses a per-item-type ceiling from
+// dataset.meta.model.buyCeilings instead — see the BuyCeilings type comment
+// for why a flat number cannot be right for every item type.
+const FALLBACK_MAX_BUY = 2_000;
+
+/** Pack-round without any cap, so callers can tell whether one bound. */
+function packRoundedRaw(value: number) {
+  return Math.round(value / 25) * 25;
+}
+
+/** Historical evidence is an observed fact, not a forecast — never capped. */
+function packRoundedUncapped(value: number) {
+  return Math.max(0, packRoundedRaw(value));
+}
+
+function packRoundedCapped(value: number, ceiling: number) {
+  return Math.max(0, Math.min(ceiling, packRoundedRaw(value)));
+}
+
+const buyCeilings = dataset.meta.model.buyCeilings;
+
+function ceilingFor(item: ComparableProduct): number {
+  if (!buyCeilings) return FALLBACK_MAX_BUY;
+  // Rounded once here (matching model.py) so a float ceiling that isn't
+  // perfectly integral can't disagree with itself between the clamp and any
+  // reported value derived from it.
+  return Math.round(buyCeilings.byItemType[item.itemType] ?? buyCeilings.globalCeiling);
+}
+
+/**
+ * The single number shown to a planner as "Sales prediction" everywhere on
+ * screen. For a predictive forecast this is the median (the typical, most
+ * likely outcome) rather than the mean — showing both side by side, as an
+ * earlier version of this card did, reads as two conflicting answers to the
+ * same question. The mean stays available as `expectedSales` for anyone
+ * doing portfolio-level arithmetic (it's the statistically correct number to
+ * sum across many products; the median is not), but a single product's card
+ * only needs one number, and the one a human means by "how many will sell"
+ * is the typical case, not an average pulled up by tail risk.
+ */
+function headlineDemand(decision: Decision): number {
+  return decision.forecast?.medianDemand ?? decision.expectedSales;
 }
 
 const P10_Z = 1.2815515655446004;
@@ -325,10 +386,14 @@ const demandModel = dataset.meta.model.demandModel;
 
 function priorFor(item: ComparableProduct): DemandPrior | undefined {
   if (!demandModel) return undefined;
+  // No row-count gate here: each group in demandModel.groups is already a
+  // hierarchically shrunk prior (category blended toward item-type, blended
+  // toward global — see machine_learning/demand.py), so whichever level is
+  // present is safe to use directly.
   const keys = [`${item.itemType}|${item.categoryType}`, item.itemType, ""];
   for (const key of keys) {
     const prior = demandModel.groups[key];
-    if (prior && prior.rows >= demandModel.minimumGroupRows) return prior;
+    if (prior) return prior;
   }
   return demandModel.groups[""];
 }
@@ -343,6 +408,11 @@ type DemandForecast = {
   quantity: number;
   low: number;
   high: number;
+  /** True when the model's own solve wanted more than the buy ceiling and
+   * was truncated — a policy limit, not evidence the target was reached. */
+  quantityCapped: boolean;
+  highCapped: boolean;
+  buyCeiling: number;
   analoguesUsed: number;
   analogueWeight: number;
   logSigma: number;
@@ -403,6 +473,11 @@ function forecastDemand(
   const p90 = Math.exp(logMu + P10_Z * logSigma);
   const medianDemand = Math.exp(logMu);
   const meanDemand = Math.exp(logMu + (logSigma * logSigma) / 2);
+  // The shipped point forecast is a *skew-corrected* mean, not the raw one:
+  // sigma is inflated for honest interval coverage, and reusing it at full
+  // strength for a point estimate overshoots. Mirrors demand.py exactly so a
+  // slider move can't drift away from the backend's own numbers.
+  const pointDemand = Math.exp(logMu + (demandModel.pointEstimateSkew * logSigma * logSigma) / 2);
   // mean/median = exp(logSigma^2/2) for a lognormal: this ratio grows purely
   // from uncertainty. When it (or the effective analogue count) crosses the
   // policy threshold, expectedSales (the mean, kept as the unbiased point
@@ -411,16 +486,22 @@ function forecastDemand(
   const skewRatio = meanDemand / Math.max(medianDemand, 1e-6);
   const wideUncertainty =
     effectiveN < demandModel.wideUncertaintyEffectiveN || skewRatio >= demandModel.wideUncertaintySkewRatio;
+  const ceiling = ceilingFor(item);
+  const rawQuantity = packRoundedRaw(newsvendorOrder(logMu, logSigma, targetSellThrough));
+  const rawHigh = packRoundedRaw(newsvendorOrder(Math.log(Math.max(p90, 1e-6)), logSigma, targetSellThrough));
   return {
-    expectedSales: packRounded(meanDemand),
-    medianDemand: packRounded(medianDemand),
+    expectedSales: packRoundedCapped(pointDemand, ceiling),
+    medianDemand: packRoundedCapped(medianDemand, ceiling),
     skewRatio,
     wideUncertainty,
-    salesLow: packRounded(p10),
-    salesHigh: packRounded(p90),
-    quantity: packRounded(newsvendorOrder(logMu, logSigma, targetSellThrough)),
-    low: packRounded(newsvendorOrder(Math.log(Math.max(p10, 1e-6)), logSigma, targetSellThrough)),
-    high: packRounded(newsvendorOrder(Math.log(Math.max(p90, 1e-6)), logSigma, targetSellThrough)),
+    salesLow: packRoundedCapped(p10, ceiling),
+    salesHigh: packRoundedCapped(p90, ceiling),
+    quantity: Math.max(0, Math.min(ceiling, rawQuantity)),
+    low: packRoundedCapped(newsvendorOrder(Math.log(Math.max(p10, 1e-6)), logSigma, targetSellThrough), ceiling),
+    high: Math.max(0, Math.min(ceiling, rawHigh)),
+    quantityCapped: rawQuantity > ceiling,
+    highCapped: rawHigh > ceiling,
+    buyCeiling: ceiling,
     analoguesUsed: logRates.length,
     analogueWeight: shrinkage,
     logSigma,
@@ -462,13 +543,20 @@ function makeDecision(
     topVisualScore === null ||
     topVisualScore === undefined ||
     displayedScore < displayedCriterion;
-  const analogueSales = noSuitableMatch || !historical ? 0 : packRounded(historical.salesTarget);
+  // Historical evidence is an observed fact, not a forecast — never capped
+  // (this catalogue's top sellers exceed 5,000 units, well past any of the
+  // per-item-type ceilings below, and truncating a real historical number
+  // would misrepresent what actually happened).
+  const analogueSales = noSuitableMatch || !historical ? 0 : packRoundedUncapped(historical.salesTarget);
   // The forecast pools every accepted analogue. Selecting one analogue changes
   // which product is shown as evidence, not which single row the buy copies.
   const forecast = noSuitableMatch ? null : forecastDemand(item, eligible, targetSellThrough);
-  const legacyQuantity = noSuitableMatch
+  const ceiling = ceilingFor(item);
+  const legacyRawQuantity = noSuitableMatch
     ? 0
-    : packRounded(analogueSales / Math.max(targetSellThrough, 0.01));
+    : packRoundedRaw(analogueSales / Math.max(targetSellThrough, 0.01));
+  const legacyQuantity = Math.max(0, Math.min(ceiling, legacyRawQuantity));
+  const legacyCapped = legacyRawQuantity > ceiling;
   return {
     ranked,
     eligible,
@@ -476,13 +564,16 @@ function makeDecision(
     quantity: forecast ? forecast.quantity : legacyQuantity,
     low: forecast ? forecast.low : legacyQuantity,
     high: forecast ? forecast.high : legacyQuantity,
+    quantityCapped: forecast ? forecast.quantityCapped : legacyCapped,
+    highCapped: forecast ? forecast.highCapped : legacyCapped,
+    buyCeiling: forecast ? forecast.buyCeiling : ceiling,
     matchConfidence,
     noSuitableMatch,
     expectedSales: forecast ? forecast.expectedSales : analogueSales,
     salesLow: forecast ? forecast.salesLow : analogueSales,
     salesHigh: forecast ? forecast.salesHigh : analogueSales,
     analogueSales,
-    analogueQuantity: noSuitableMatch || !historical ? 0 : packRounded(historical.order),
+    analogueQuantity: noSuitableMatch || !historical ? 0 : packRoundedUncapped(historical.order),
     forecast,
   };
 }
@@ -755,12 +846,20 @@ function App() {
         "Style similarity",
         "Texture similarity",
         "Match confidence",
-        "Forecast demand",
+        "Forecast demand (typical)",
+        "Forecast demand (average)",
         "Forecast low (p10)",
         "Forecast high (p90)",
         "Analogue actual sales",
         "Analogue original order",
         "AI recommended quantity",
+        // Audit trail rather than an on-card warning: a capped order is a
+        // policy limit, not a target the model actually reached, and a capped
+        // range tail understates upside. Neither belongs in the planner's
+        // face, but both belong in offline analysis.
+        "Buy ceiling",
+        "Order hit ceiling",
+        "Range tail hit ceiling",
         "Planner quantity",
         "Approval status",
       ],
@@ -782,12 +881,16 @@ function App() {
           scoreValue(top?.fashionVisualScore),
           scoreValue(top?.textureVisualScore),
           itemDecision.matchConfidence,
+          headlineDemand(itemDecision),
           itemDecision.expectedSales,
           itemDecision.salesLow,
           itemDecision.salesHigh,
           itemDecision.analogueSales,
           itemDecision.analogueQuantity,
           itemDecision.quantity,
+          itemDecision.buyCeiling,
+          itemDecision.quantityCapped ? "Yes" : "No",
+          itemDecision.highCapped ? "Yes" : "No",
           overrides[item.id] ?? "",
           approvedIds[item.id] ? "Approved" : "Pending",
         ];
@@ -967,34 +1070,37 @@ function App() {
                         Wide uncertainty
                       </span>
                     )}
+                    {decision.quantityCapped && (
+                      <span
+                        className="warning-chip"
+                        title={`The model wanted more than the ${numberFormatter.format(decision.buyCeiling)}-unit ${selected.itemType} buy ceiling to reach ${Math.round(targetSellThrough * 100)}% expected sell-through. This number is a policy limit, not a target that was actually reached.`}
+                      >
+                        Capped at max buy
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="quantity-hero">
                   <div className="quantity-primary">
-                    <small>Recommended initial order</small>
+                    <small>Order prediction</small>
                     <div>
                       <strong>{numberFormatter.format(finalQuantity)}</strong>
                       <span>units</span>
                     </div>
                     <p>
                       {decision.forecast
-                        ? `Buy that reaches ${Math.round(targetSellThrough * 100)}% expected sell-through · ${numberFormatter.format(decision.low)}–${numberFormatter.format(decision.high)} across the demand range`
+                        ? `${Math.round(targetSellThrough * 100)}% sell-through · ${numberFormatter.format(decision.low)}–${numberFormatter.format(decision.high)}`
                         : `Selected product's sales ÷ ${Math.round(targetSellThrough * 100)}% target sell-through`}
                     </p>
                   </div>
                   <div className="quantity-secondary">
-                    <small>{decision.forecast ? "Forecast demand (average)" : "Matched product sales"}</small>
-                    <strong>{numberFormatter.format(decision.expectedSales)} units</strong>
+                    <small>{decision.forecast ? "Sales prediction" : "Matched product sales"}</small>
+                    <strong>{numberFormatter.format(headlineDemand(decision))} units</strong>
                     <span>
                       {decision.forecast
-                        ? `80% range ${numberFormatter.format(decision.salesLow)}–${numberFormatter.format(decision.salesHigh)} · pooled from ${decision.forecast.analoguesUsed} analogue${decision.forecast.analoguesUsed === 1 ? "" : "s"}`
+                        ? `80%: ${numberFormatter.format(decision.salesLow)}–${numberFormatter.format(decision.salesHigh)} · ${decision.forecast.analoguesUsed} analogue${decision.forecast.analoguesUsed === 1 ? "" : "s"}`
                         : "Cleaned observed sales from the one selected historical product"}
                     </span>
-                    {decision.forecast?.wideUncertainty && (
-                      <span className="wide-uncertainty-note">
-                        Typical outcome ≈ {numberFormatter.format(decision.forecast.medianDemand)} units — the average is pulled up by a small chance of much higher demand.
-                      </span>
-                    )}
                   </div>
                 </div>
                 <div className="match-confidence-row">
@@ -1014,17 +1120,20 @@ function App() {
                     ) : (
                       decision.forecast ? (
                         <>
-                          Demand is forecast at <b>{numberFormatter.format(decision.expectedSales)} units</b> (80% range {numberFormatter.format(decision.salesLow)}–{numberFormatter.format(decision.salesHigh)}), pooled from <b>{decision.forecast.analoguesUsed} accepted {decision.forecast.analoguesUsed === 1 ? "analogue" : "analogues"}</b> and corrected for how long each one was on the floor. {Math.round(decision.forecast.analogueWeight * 100)}% of the estimate comes from those analogues and the rest from the {selected.itemType}/{selected.categoryType} baseline.{" "}
-                          {decision.forecast.wideUncertainty && (
+                          Forecast: <b>{numberFormatter.format(headlineDemand(decision))} units</b> ({numberFormatter.format(decision.salesLow)}–{numberFormatter.format(decision.salesHigh)}, {decision.forecast.analoguesUsed} {decision.forecast.analoguesUsed === 1 ? "analogue" : "analogues"}).{decision.forecast.wideUncertainty ? " Evidence is thin, so treat the range as the estimate." : ""}{" "}
+                          {decision.quantityCapped ? (
                             <>
-                              This evidence is thin or conflicting, so the average is skewed well above the typical case — expect <b>{numberFormatter.format(decision.forecast.medianDemand)} units</b> more often than {numberFormatter.format(decision.expectedSales)}, with real odds of either extreme.{" "}
+                              Capped at the {selected.itemType} ceiling of <b>{numberFormatter.format(decision.buyCeiling)} units</b>.
+                            </>
+                          ) : (
+                            <>
+                              Order <b>{numberFormatter.format(decision.quantity)} units</b> for <b>{Math.round(targetSellThrough * 100)}% sell-through</b>.
                             </>
                           )}
-                          Buying <b>{numberFormatter.format(decision.quantity)} units</b> reaches a <b>{Math.round(targetSellThrough * 100)}% expected sell-through</b> — confirm with planner judgment below.
                         </>
                       ) : (
                         <>
-                          This single matched product recorded <b>{numberFormatter.format(decision.expectedSales)} cleaned sales units</b>. At a <b>{Math.round(targetSellThrough * 100)}% target sell-through</b>, that implies a starting order of <b>{numberFormatter.format(decision.quantity)} units</b> — confirm with planner judgment below.
+                          Matched product sold <b>{numberFormatter.format(decision.expectedSales)} units</b>. At <b>{Math.round(targetSellThrough * 100)}% target sell-through</b>, order <b>{numberFormatter.format(decision.quantity)} units</b>.
                         </>
                       )
                     )}
@@ -1136,7 +1245,7 @@ function App() {
                   <small className="setting-help">
                     {demandModel
                       ? "The buy is solved so expected sales reach this share of it, given the forecast range. Rounded to packs of 25."
-                      : "Recommended order = selected product sales ÷ target sell-through, rounded to packs of 25."}
+                      : "Order prediction = selected product sales ÷ target sell-through, rounded to packs of 25."}
                   </small>
                 </label>
                 {focusedHistory && focusedMatch ? (
@@ -1281,7 +1390,7 @@ function App() {
               <small>{visualMatchingAvailable ? `${dataset.meta.missingUpcomingImages.length} linked-image exceptions` : "Attribute-only recommendations active"}</small>
             </article>
             <article><span>Single-match decisions</span><strong>{portfolio.filter(({ decision }) => !decision.noSuitableMatch).length}</strong><small>accepted visual analogues</small></article>
-            <article className="accent"><span>Recommended order</span><strong>{numberFormatter.format(totalOrder)}</strong><small>units across {dataset.meta.upcomingSeason}</small></article>
+            <article className="accent"><span>Order prediction</span><strong>{numberFormatter.format(totalOrder)}</strong><small>units across {dataset.meta.upcomingSeason}</small></article>
           </div>
           <div className="portfolio-toolbar">
             <label className="search-box wide">
@@ -1316,7 +1425,7 @@ function App() {
           </div>
           <div className="portfolio-table-wrap">
             <table className="portfolio-table">
-              <thead><tr><th>Upcoming style</th><th>Product attributes</th><th>Top historical analogue</th><th>Match score</th><th>Decision signals</th><th>{demandModel ? "Forecast demand" : "Expected sales"}</th><th>Recommended order</th><th>Planner order</th><th><span className="sr-only">Actions</span></th></tr></thead>
+              <thead><tr><th>Upcoming style</th><th>Product attributes</th><th>Top historical analogue</th><th>Match score</th><th>Decision signals</th><th>{demandModel ? "Sales prediction" : "Expected sales"}</th><th>Order prediction</th><th>Planner order</th><th><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>
                 {queueItems.length === 0 && (
                   <tr className="table-empty-row">
@@ -1348,7 +1457,7 @@ function App() {
                       </td>
                       <td><div className="table-signals">{itemDecision.noSuitableMatch ? <NoMatchPill /> : <MatchConfidencePill confidence={itemDecision.matchConfidence} detailed />}</div></td>
                       <td>
-                        <strong>{numberFormatter.format(itemDecision.expectedSales)}</strong>
+                        <strong>{numberFormatter.format(headlineDemand(itemDecision))}</strong>
                         <small>
                           {itemDecision.noSuitableMatch
                             ? "not generated"

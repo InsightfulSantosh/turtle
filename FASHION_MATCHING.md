@@ -83,13 +83,6 @@ Before production indexing, replace `FASHION_MATCHING_MODEL_REVISION=main` with
 an exact Hugging Face commit hash. Models using remote model code must be
 security-reviewed and pinned before deployment.
 
-The garment path also installs the pinned SAM 2 package recorded in
-`backend/requirements-fashion-matching.txt`. It downloads the configured
-Grounding DINO and SAM 2.1 weights on the first rebuild. Pin
-`FASHION_GARMENT_DETECTOR_REVISION` and `FASHION_GARMENT_SAM2_REVISION` before
-deployment, then retain the generated artifact's resolved revisions and mask
-quality statistics as the audit record.
-
 To create a smaller, non-production review artifact for a single item type,
 use a separate output path. For example, this keeps the full browser artifact
 unchanged while building an OTSH-only preview:
@@ -113,12 +106,6 @@ from Git. Set the normal Hugging Face cache environment variables when a
 deployment needs a dedicated persistent cache.
 
 ## Manifests
-
-Templates are provided in:
-
-- `backend/examples/historical_catalog.template.csv`
-- `backend/examples/upcoming_catalog.template.csv`
-- `backend/examples/fashion_labels.template.csv`
 
 Required image-manifest fields:
 
@@ -207,24 +194,37 @@ stop the remaining manifest.
 
 ## Scores
 
-Default provisional weights are:
+Retrieval is visual-only by default (`FASHION_VISUAL_ONLY_RANKING=true`):
 
 | Signal | Weight |
 |---|---:|
-| Image | 0.70 |
-| Structured attributes | 0.20 |
-| Description text | 0.10 |
+| Image | 1.00 |
+| Structured attributes | 0.00 |
+| Description text | 0.00 |
 
-These values are configuration defaults, not validated business constants. If a
-signal is missing, its weight is explicitly removed and the remaining weights
-are renormalized. The output includes the individual scores and actual weights
-used for every result. No fake zero score is inserted.
+Structured-attribute and text weights exist as configuration knobs
+(`FASHION_ATTRIBUTE_WEIGHT`, `FASHION_TEXT_WEIGHT`) but are zeroed by default;
+if a signal is missing, its weight is explicitly removed and the remaining
+weights are renormalized. The output includes the individual scores and
+actual weights used for every result. No fake zero score is inserted.
+
+Within the visual signal itself, appearance evidence is a separate weighted
+blend:
+
+| Appearance component | Weight |
+|---|---:|
+| Neural (FashionSigLIP) | 0.45 |
+| Colour palette (CIEDE2000) | 0.45 |
+| Texture | 0.10 |
+
+configured via `FASHION_APPEARANCE_NEURAL_WEIGHT`,
+`FASHION_APPEARANCE_COLOUR_WEIGHT` and `FASHION_APPEARANCE_TEXTURE_WEIGHT`.
 
 The provisional minimum final score is `0.50`. Results below it return
 `no_suitable_match=true` with no product matches. In the browser artifact, a
 candidate must also reach Medium match confidence and a calibrated visual score
-of at least `0.50`; otherwise no historical product is shown and the demand
-forecast uses the regression model without analogue blending.
+of at least `0.50`; otherwise no historical product is shown, no sales or
+order quantity is generated, and planner review is required.
 
 Cosine image/text scores are mapped from `[-1, 1]` to `[0, 1]`. Structured
 attribute similarity is the fraction of populated shared fields that match
@@ -234,7 +234,8 @@ time-separated relevance set.
 
 ## Evaluation
 
-Create reviewed labels from the provided template. Relevance can be binary or
+Create reviewed labels as a CSV with columns `query_image_id`,
+`relevant_product_id`, `relevance` and `no_match`. Relevance can be binary or
 graded. A query with no acceptable historical product should set
 `no_match=true`.
 
@@ -275,8 +276,6 @@ environment with pinned model revisions.
 
 ## Known limitations and next steps
 
-- Uniform-background cropping is deterministic but is not semantic garment
-  segmentation. It is disabled by default and must be evaluated before use.
 - Current attribute scoring treats shared populated fields uniformly. Learn
   category-specific importance only after collecting reviewed labels.
 - The default weights are provisional.

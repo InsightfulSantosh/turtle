@@ -23,9 +23,6 @@ def _environment_path(name: str, default: Path) -> Path:
 @dataclass(frozen=True)
 class ProjectPaths:
     repository: Path
-    workspace: Path
-    backend: Path
-    frontend: Path
     data: Path
     temporary: Path
     model_artifact: Path
@@ -35,9 +32,6 @@ REPOSITORY_ROOT = _repository_root()
 
 paths = ProjectPaths(
     repository=REPOSITORY_ROOT,
-    workspace=REPOSITORY_ROOT,
-    backend=REPOSITORY_ROOT / "backend",
-    frontend=REPOSITORY_ROOT / "frontend",
     data=_environment_path("TURTLE_DATA_ROOT", REPOSITORY_ROOT / "DATA"),
     temporary=_environment_path("TURTLE_TEMP_ROOT", REPOSITORY_ROOT / "tmp"),
     model_artifact=_environment_path(

@@ -1012,15 +1012,6 @@ select {
   margin-top: 4px;
 }
 
-.wide-uncertainty-note {
-  color: #8d5d13;
-  display: block;
-  font-size: 8px;
-  font-weight: 700;
-  line-height: 1.4;
-  margin-top: 6px;
-}
-
 .match-confidence-row {
   align-items: center;
   display: flex;

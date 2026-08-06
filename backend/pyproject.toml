@@ -3,17 +3,11 @@ name = "turtle-season-intelligence-backend"
 version = "3.0.0"
 requires-python = ">=3.12"
 dependencies = [
-  "fastapi==0.139.0",
   "numpy>=2.0,<3",
   "openpyxl>=3.1,<4",
-  "pydantic>=2.9,<3",
-  "scikit-learn>=1.6,<2",
-  "typing-extensions>=4.12,<5",
-  "uvicorn[standard]==0.51.0",
 ]
 
 [project.scripts]
-turtle-export-model = "machine_learning.train_and_export:main"
 turtle-prepare-data = "data_pipeline.prepare_real_data:main"
 turtle-index-fashion = "fashion_matching.index_catalog:main"
 turtle-match-fashion = "fashion_matching.match:main"
@@ -27,7 +21,6 @@ fashion-matching = [
   "Pillow>=11,<12",
   "faiss-cpu>=1.8,<2; platform_system != 'Darwin'",
   "qdrant-client>=1.14,<2",
-  "SAM-2 @ git+https://github.com/facebookresearch/sam2.git@2b90b9f5ceec907a1c18123530e92e794ad901a4",
   "torch>=2.7,<3",
   "transformers>=4.52,<5",
 ]

@@ -7,6 +7,7 @@ from machine_learning.demand import (
     cleaned_sales,
     corrected_weekly_rate,
     expected_sales_at,
+    fit_buy_ceilings,
     fit_demand_priors,
     is_censored,
     newsvendor_order,
@@ -47,6 +48,24 @@ def synthetic_history(count: int = 40) -> list[dict]:
             order=600 + 20 * index,
             dispatch=600 + 20 * index,
             sales=int((600 + 20 * index) * (0.45 + 0.01 * (index % 20))),
+        )
+        for index in range(count)
+    ]
+
+
+def large_scale_history(count: int = 40) -> list[dict]:
+    """Same shape as synthetic_history but at a scale where a buy ceiling's
+    multiplier effect stays visible above the 500-unit floor at the tuned
+    (0.35x) default — synthetic_history's own max (~1,380) would collapse to
+    the floor and mask the multiplier entirely.
+    """
+
+    return [
+        history_row(
+            f"H{index}",
+            order=3_000 + 100 * index,
+            dispatch=3_000 + 100 * index,
+            sales=int((3_000 + 100 * index) * (0.45 + 0.01 * (index % 20))),
         )
         for index in range(count)
     ]
@@ -237,6 +256,71 @@ def test_sell_through_target_moves_the_buy() -> None:
     aggressive = recommend_one(item, history, matches, {}, target_sell_through=0.55, demand_priors=priors)
 
     assert aggressive["quantity"] > conservative["quantity"]
+
+
+def test_low_target_sell_through_is_flagged_as_capped_not_calibrated() -> None:
+    """A leave-one-out sweep showed target sell-through settings below ~50%
+    mostly hit the buy ceiling rather than genuinely reaching that target
+    (95% of products at a 10% target, 56% at 40%, still 9% even at the
+    default 70%). The flag must say so plainly instead of presenting a capped
+    number as if the model had actually solved for the requested target.
+    """
+
+    history = large_scale_history()
+    priors = fit_demand_priors(history)
+    ceilings = fit_buy_ceilings(history)
+    matches = [{"historicalId": f"H{index}", "visualScore": 0.88, "hybridScore": 0.88} for index in range(4)]
+    item = {"id": "NEW", "itemType": "OTSH", "categoryType": "CASUAL"}
+    expected_ceiling = ceilings.ceiling_for(item)
+
+    capped = recommend_one(
+        item, history, matches, {}, target_sell_through=0.05, demand_priors=priors, buy_ceilings=ceilings
+    )
+    assert capped["quantity"] == expected_ceiling
+    assert capped["buyCeiling"] == expected_ceiling
+    assert capped["quantityCapped"] is True
+    assert capped["highCapped"] is True
+
+    normal = recommend_one(
+        item, history, matches, {}, target_sell_through=0.80, demand_priors=priors, buy_ceilings=ceilings
+    )
+    assert normal["quantity"] < expected_ceiling
+    assert normal["quantityCapped"] is False
+
+
+def test_buy_ceiling_scales_per_item_type_not_a_flat_constant() -> None:
+    """Per-item-type historical maxima on the real catalogue range ~44x (150
+    to 6,700 units); a flat cap cannot be right for every item type. Verify
+    the fitted ceiling actually tracks each type's own observed scale.
+    """
+
+    # Both observed maxima comfortably clear the default 500-unit floor at the
+    # tuned 0.35x multiplier, so its effect is directly visible rather than
+    # masked by the floor.
+    small = [history_row(f"S{i}", order=2_000, dispatch=2_000, sales=1_600, item_type="OTSU") for i in range(5)]
+    large = [history_row(f"L{i}", order=15_000, dispatch=15_000, sales=12_000, item_type="OTTR") for i in range(5)]
+    ceilings = fit_buy_ceilings(small + large)
+
+    small_ceiling = ceilings.ceiling_for({"itemType": "OTSU"})
+    large_ceiling = ceilings.ceiling_for({"itemType": "OTTR"})
+
+    assert small_ceiling == 2_000 * ceilings.multiplier
+    assert large_ceiling == 15_000 * ceilings.multiplier
+    assert large_ceiling > small_ceiling
+
+
+def test_buy_ceiling_floor_and_unknown_item_type_fallback() -> None:
+    """A tiny observed max still gets a usable floor, and an item type absent
+    from history falls back to the catalogue-wide ceiling rather than
+    crashing or silently returning zero.
+    """
+
+    policy = DemandPolicy(buy_ceiling_floor=500.0, buy_ceiling_multiplier=2.0)
+    tiny = [history_row("T0", order=10, dispatch=10, sales=8, item_type="OTGL")]
+    ceilings = fit_buy_ceilings(tiny, policy)
+
+    assert ceilings.ceiling_for({"itemType": "OTGL"}) == 500.0  # floor, not 10 * 2 = 20
+    assert ceilings.ceiling_for({"itemType": "UNSEEN"}) == ceilings.global_ceiling
 
 
 def test_priors_need_uncensored_history() -> None:

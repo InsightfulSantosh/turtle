@@ -21,15 +21,12 @@ turtle/
 │   ├── app/                          Pages, styles and generated-data.json
 │   ├── public/                       Static assets
 │   └── tests/                        Frontend and artifact-contract tests
-├── backend/                          Python services and data-science code
-│   ├── api/                          Main and embedding FastAPI applications
+├── backend/                          Python data-science pipeline (no live API)
 │   ├── src/
-│   │   ├── ai/                       End-to-end recommendation orchestration
 │   │   ├── core/                     Central configuration and paths
 │   │   ├── data_pipeline/            Workbook validation and preparation
-│   │   ├── deep_learning/            Image/text embeddings and fine-tuning
-│   │   ├── domain/                   Shared business contracts
-│   │   └── machine_learning/         Ranking, demand and optimization models
+│   │   ├── fashion_matching/         Visual retrieval, encoding and image validation
+│   │   └── machine_learning/         Analogue similarity and predictive demand models
 │   └── tests/                        Backend unit and contract tests
 ├── Makefile                          Central developer commands
 └── CLIENT_DEMO_GUIDE.md              Model and client-demo explanation
@@ -38,17 +35,18 @@ turtle/
 The dependency direction is intentional:
 
 ```text
-backend/api
+data_pipeline (CLI)
       ↓
-AI orchestration
+machine learning + fashion matching
       ↓
-ML + deep learning
-      ↓
-domain contracts + core configuration
+core configuration
 ```
 
-Frontend code does not import backend internals. The backend writes the
-versioned browser artifact to `frontend/app/generated-data.json`.
+The backend is a CLI-driven pipeline, not a live service: it writes the
+versioned browser artifact to `frontend/app/generated-data.json`, and the
+frontend reads that static file directly. Frontend code does not import
+backend internals or call a backend API at runtime; product images are
+served by the frontend's own route, which reads `DATA/raw` directly.
 
 ## Central configuration
 
@@ -89,25 +87,22 @@ npm --prefix frontend install
 ```bash
 make data            # rebuild the frontend artifact from the real workbooks
 make frontend-dev    # run the planner at http://localhost:3000
-make backend-api     # run FastAPI at http://localhost:8080
 make backend-test    # run Python tests
 make frontend-test   # build and test the Next.js application
 make test            # run both test suites
 ```
 
-The frontend can run by itself because it reads the generated JSON artifact.
-The API is required only for live service integration.
+The frontend runs by itself because it reads the generated JSON artifact
+directly; there is no live backend service to run alongside it.
 
 ## Backend responsibilities
 
 - **Data pipeline:** validates identifiers and source columns, converts the
   workbooks and produces normalized historical/upcoming records.
-- **Machine learning:** attribute matching, candidate ranking, demand
-  forecasting, hierarchy reconciliation and constrained ordering.
-- **Deep learning:** FashionCLIP-compatible image/text embeddings and
-  fine-tuning workflows.
-- **AI orchestration:** combines matching, demand forecasting and inventory
-  policy into an explainable recommendation.
+- **Fashion matching:** FashionCLIP-compatible image encoding, DINO
+  reranking and colour/pattern gated visual retrieval.
+- **Machine learning:** attribute similarity, analogue-pooled predictive
+  demand estimation and newsvendor-solved order quantities.
 
 See [backend/README.md](backend/README.md) for backend commands and training
 contracts.

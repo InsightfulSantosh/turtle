@@ -9,28 +9,29 @@ from typing import Any
 import numpy as np
 
 from machine_learning.demand import (
+    BuyCeilings,
     DemandPriors,
     annotate_history_rates,
+    clamp,
     cleaned_sales,
+    fit_buy_ceilings,
     fit_demand_priors,
     newsvendor_order,
     predict_demand,
+    round_pack,
+    serialize_buy_ceilings,
     serialize_priors,
 )
 
 MODEL_VERSION = "5.1.0"
-PACK_SIZE = 25
+# Fallback only, used when no data-derived BuyCeilings is available (the
+# legacy no-forecast path, or a caller that didn't fit one). The live
+# predictive path uses a per-item-type ceiling from fit_buy_ceilings instead:
+# a flat number cannot be right for every item type when this catalogue's own
+# per-item-type historical maxima range from ~150 to ~6,700 units.
 MAX_BUY = 2_000
 MIN_CONVINCING_VISUAL_SCORE = 0.50
 DEFAULT_TARGET_SELL_THROUGH = 0.70
-
-
-def clamp(value: float, minimum: float, maximum: float) -> float:
-    return max(minimum, min(maximum, value))
-
-
-def round_pack(value: float, pack: int = PACK_SIZE) -> int:
-    return int(round(value / pack) * pack)
 
 
 def quality_flags(item: dict[str, Any]) -> list[str]:
@@ -127,6 +128,7 @@ def recommend_one(
     target_sell_through: float = DEFAULT_TARGET_SELL_THROUGH,
     minimum_visual_score: float = MIN_CONVINCING_VISUAL_SCORE,
     demand_priors: DemandPriors | None = None,
+    buy_ceilings: BuyCeilings | None = None,
 ) -> dict[str, Any]:
     """Calculate one buy from the accepted visual analogue evidence.
 
@@ -135,7 +137,17 @@ def recommend_one(
     target. Supplying priors switches on the predictive estimator, which pools
     the accepted analogues, corrects for stock-outs and exposure, and solves
     the buy against the target under uncertainty.
+
+    ``buy_ceilings`` supplies the data-derived, per-item-type sanity cap on
+    the forecast and order (see ``demand.fit_buy_ceilings``). Without it, the
+    flat ``MAX_BUY`` fallback applies.
     """
+
+    # Rounded once to an int and reused everywhere below (clamping and the
+    # reported buyCeiling both read this exact value), so a float ceiling
+    # that isn't perfectly integral (e.g. 5700 * 0.35) can't disagree with
+    # itself by rounding one way when clamping and another when reporting.
+    ceiling = int(round(buy_ceilings.ceiling_for(item))) if buy_ceilings is not None else MAX_BUY
 
     selected = matches[:1]
     history_by_id = {str(historical["id"]): historical for historical in history}
@@ -157,6 +169,8 @@ def recommend_one(
     historical_order = 0.0
     analogue_sales = 0
     prediction = None
+    quantity_capped = False
+    high_capped = False
     if no_suitable_match or selected_history is None:
         expected_sales = 0
         quantity = 0
@@ -164,7 +178,11 @@ def recommend_one(
         order_low = order_high = 0
     else:
         historical_order = max(float(selected_history.get("order") or 0), 0.0)
-        analogue_sales = int(clamp(round_pack(sales_target(selected_history)), 0, MAX_BUY))
+        # Historical evidence is an observed fact, not a forecast that needs a
+        # sanity bound — capping it here would silently understate a real
+        # analogue's own sales (this catalogue's top sellers exceed 5,000
+        # units, well past the legacy flat cap).
+        analogue_sales = int(max(0, round_pack(sales_target(selected_history))))
         accepted = [
             match
             for match in matches
@@ -181,31 +199,31 @@ def recommend_one(
             # Legacy rule: republish the analogue's own sales as the forecast.
             expected_sales = analogue_sales
             sales_low = sales_high = expected_sales
-            quantity = int(
-                clamp(
-                    round_pack(expected_sales / max(target_sell_through, 0.01)),
-                    0,
-                    MAX_BUY,
-                )
-            )
+            raw_quantity = round_pack(expected_sales / max(target_sell_through, 0.01))
+            quantity = int(clamp(raw_quantity, 0, ceiling))
+            quantity_capped = raw_quantity > ceiling
             order_low = order_high = quantity
+            high_capped = quantity_capped
         else:
-            expected_sales = int(clamp(round_pack(prediction.mean_demand), 0, MAX_BUY))
-            sales_low = int(clamp(round_pack(prediction.p10), 0, MAX_BUY))
-            sales_high = int(clamp(round_pack(prediction.p90), 0, MAX_BUY))
-            quantity = int(
-                clamp(
-                    round_pack(
-                        newsvendor_order(
-                            prediction.log_mu,
-                            prediction.log_sigma,
-                            target_sell_through,
-                        )
-                    ),
-                    0,
-                    MAX_BUY,
-                )
+            # point_demand, not the raw mean: the mean is inflated by a sigma
+            # that was tuned for honest interval coverage, which overshoots as
+            # a point estimate. See DemandPolicy.point_estimate_skew.
+            expected_sales = int(clamp(round_pack(prediction.point_demand), 0, ceiling))
+            sales_low = int(clamp(round_pack(prediction.p10), 0, ceiling))
+            sales_high = int(clamp(round_pack(prediction.p90), 0, ceiling))
+            # Raw (uncapped) solves are kept alongside the clamped ones so the
+            # caller can tell a genuine forecast apart from a number the buy
+            # ceiling forced, rather than silently presenting both the same
+            # way. Before this ceiling was made data-derived, the flat 2,000
+            # fallback bound on ~9% of products even at the default 70%
+            # target, and the large majority at low targets — so a target
+            # sell-through setting could look "wrong" for reasons that were
+            # actually the cap, not the forecast.
+            raw_quantity = round_pack(
+                newsvendor_order(prediction.log_mu, prediction.log_sigma, target_sell_through)
             )
+            quantity = int(clamp(raw_quantity, 0, ceiling))
+            quantity_capped = raw_quantity > ceiling
             # Order band: what the buy would be if demand landed at the low or
             # high end of the predicted range, not a cosmetic +/- on quantity.
             order_low = int(
@@ -218,22 +236,18 @@ def recommend_one(
                         )
                     ),
                     0,
-                    MAX_BUY,
+                    ceiling,
                 )
             )
-            order_high = int(
-                clamp(
-                    round_pack(
-                        newsvendor_order(
-                            math.log(max(prediction.p90, 1e-6)),
-                            prediction.log_sigma,
-                            target_sell_through,
-                        )
-                    ),
-                    0,
-                    MAX_BUY,
+            raw_high = round_pack(
+                newsvendor_order(
+                    math.log(max(prediction.p90, 1e-6)),
+                    prediction.log_sigma,
+                    target_sell_through,
                 )
             )
+            order_high = int(clamp(raw_high, 0, ceiling))
+            high_capped = raw_high > ceiling
 
     result = {
         "quantity": quantity,
@@ -246,12 +260,20 @@ def recommend_one(
         "noSuitableMatch": no_suitable_match,
         "confidence": relevance,
         "analogueSales": analogue_sales,
-        "analogueQuantity": int(clamp(round_pack(historical_order), 0, MAX_BUY)) if selected_history else 0,
+        # Historical evidence, not capped — see the analogueSales comment above.
+        "analogueQuantity": int(max(0, round_pack(historical_order))) if selected_history else 0,
         "targetSellThrough": target_sell_through,
         "minimumVisualScore": minimum_visual_score,
         "evidencePolicy": "single_top_visual_analogue",
         "topMatchScore": round(top_scores[0] if top_scores else 0.0, 4),
         "modelVersion": MODEL_VERSION,
+        # True when the model's own solve wanted more than the buy ceiling
+        # and was truncated. A capped quantity is a policy limit, not
+        # evidence that the target sell-through was reached — surface it
+        # rather than let a hit cap masquerade as a well-calibrated number.
+        "quantityCapped": quantity_capped,
+        "highCapped": high_capped,
+        "buyCeiling": ceiling,
     }
     if prediction is not None:
         result["evidencePolicy"] = "pooled_visual_analogue_forecast"
@@ -261,7 +283,7 @@ def recommend_one(
         # is the statistically correct point estimate to buy against (it is
         # what the newsvendor solve and the validated backtest both use), but
         # it can sit well above the *typical* outcome a planner would expect.
-        median_demand = int(clamp(round_pack(prediction.median_demand), 0, MAX_BUY))
+        median_demand = int(clamp(round_pack(prediction.median_demand), 0, ceiling))
         skew_ratio = prediction.mean_demand / max(prediction.median_demand, 1e-6)
         policy = demand_priors.policy if demand_priors is not None else None
         wide_uncertainty = policy is not None and (
@@ -385,7 +407,6 @@ def build_model_artifact(
     texture_historical_calibration: VisionCalibration | None = None
     texture_serving_calibration: VisionCalibration | None = None
     selected_dino_weight = 0.0
-    visual_only_ranking = bool(vision_output.get("visualOnlyRanking", False))
     if candidate_rows:
         fashion_historical_values = _candidate_calibration_values(
             candidate_rows,
@@ -506,6 +527,10 @@ def build_model_artifact(
     demand_priors = fit_demand_priors(history) if demand_forecast else None
     if demand_priors is not None:
         annotate_history_rates(history, demand_priors)
+    # Data-derived sanity ceiling per item type, replacing the flat MAX_BUY
+    # fallback — see BuyCeilings for why a single constant cannot be right
+    # for every item type on this catalogue.
+    buy_ceilings = fit_buy_ceilings(history) if demand_forecast else None
     match_confidence_counts = {"High": 0, "Medium": 0, "Low": 0}
     all_visual_scores: list[float] = []
     retrieval_history = [historical for historical in history if historical.get("imageUrl")] or history
@@ -579,6 +604,7 @@ def build_model_artifact(
             matches,
             {"topK": 4},
             demand_priors=demand_priors,
+            buy_ceilings=buy_ceilings,
         )
         item["matches"] = matches[:4]
         model_flags = list(item.get("modelFlags", []))
@@ -664,6 +690,11 @@ def build_model_artifact(
                 **(
                     {"demandModel": serialize_priors(demand_priors)}
                     if demand_priors is not None
+                    else {}
+                ),
+                **(
+                    {"buyCeilings": serialize_buy_ceilings(buy_ceilings)}
+                    if buy_ceilings is not None
                     else {}
                 ),
             },

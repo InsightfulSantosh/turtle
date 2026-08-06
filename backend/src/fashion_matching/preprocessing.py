@@ -40,7 +40,6 @@ class ImagePreprocessor:
             checksum=checksum,
             width=image.width,
             height=image.height,
-            source_bytes=len(data),
         )
 
     def _load_bytes(self, record: ManifestRecord) -> bytes:

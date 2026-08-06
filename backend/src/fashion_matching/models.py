@@ -35,14 +35,6 @@ class ManifestRecord:
     text: str | None = None
     attributes: Mapping[str, str] = field(default_factory=dict)
 
-    @property
-    def image_source(self) -> str:
-        if self.image_path is not None:
-            return str(self.image_path)
-        if self.image_url is not None:
-            return self.image_url
-        raise ValueError("manifest record has no image source")
-
     @classmethod
     def from_mapping(
         cls,
@@ -86,7 +78,6 @@ class PreparedImage:
     checksum: str
     width: int
     height: int
-    source_bytes: int
 
 
 @dataclass(frozen=True)

@@ -3,27 +3,20 @@
 The versioned Qdrant catalogue index and image-first retrieval workflow are
 documented in [../FASHION_MATCHING.md](../FASHION_MATCHING.md).
 
-The backend has a separate FastAPI application layer and a Python 3.12
-src-layout data-science package. It keeps API transport, data preparation,
-machine learning and deep learning concerns separate while sharing one
-configuration and one set of domain contracts.
+The backend is a Python 3.12 src-layout data-science package with no live
+API — it is a CLI-driven pipeline that writes a versioned browser artifact
+consumed directly by the frontend. It keeps data preparation, visual
+matching and machine learning concerns separate while sharing one
+configuration.
 
 ## Backend map
 
 | Location | Responsibility |
 |---|---|
-| `api/` | Main and embedding FastAPI routes, validation and authentication |
-| `src/ai/` | Recommendation workflow that combines all model components |
 | `src/core/` | Environment and filesystem configuration |
 | `src/data_pipeline/` | Real workbook ingestion, validation and artifact export |
-| `src/deep_learning/` | Image/text providers and model-training workflows |
-| `src/domain/` | Typed business and recommendation contracts |
-| `src/machine_learning/` | Similarity, ranking, forecasting, hierarchy and optimization |
-
-Training entry points are grouped with the model family they train:
-
-- `machine_learning/training/` contains demand, ranker and hierarchy training.
-- `deep_learning/training/` contains FashionCLIP fine-tuning.
+| `src/fashion_matching/` | Visual retrieval, image encoding and validation |
+| `src/machine_learning/` | Analogue similarity and predictive demand estimation |
 
 ## Local setup
 
@@ -32,36 +25,6 @@ Run from the repository root:
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r backend/requirements-dev.txt
-```
-
-For the complete model-training dependency set:
-
-```bash
-.venv/bin/pip install -r backend/requirements-training.txt
-```
-
-## Run
-
-```bash
-make backend-api
-```
-
-Equivalent direct command:
-
-```bash
-PYTHONPATH=backend/src .venv/bin/python -m uvicorn \
-  --app-dir backend api.main:app --host 0.0.0.0 --port 8080
-```
-
-The API reads `frontend/app/generated-data.json` by default. Override it with
-`TURTLE_MODEL_ARTIFACT`.
-
-The optional image/text embedding API is also separated under `backend/api`:
-
-```bash
-.venv/bin/pip install -r backend/requirements-deep-learning.txt
-PYTHONPATH=backend/src .venv/bin/python -m uvicorn \
-  --app-dir backend api.embedding_service:app --host 0.0.0.0 --port 8090
 ```
 
 ## Rebuild real data
@@ -125,9 +88,8 @@ make backend-test
 PYTHONPATH=backend/src .venv/bin/python -m ruff check backend/src backend/tests
 ```
 
-The tests cover the generated artifact contract, attribute similarity,
-scikit-learn demand pipeline, ranking, buy constraints and hierarchy
-reconciliation.
+The tests cover the generated artifact contract, attribute similarity and the
+analogue-pooled demand pipeline.
 
 ## Model boundaries
 
@@ -136,43 +98,16 @@ reconciliation.
 The classical ML layer owns:
 
 - explainable attribute similarity;
-- CatBoost-compatible candidate ranking;
-- scikit-learn and LightGBM-compatible demand forecasts;
-- forecast hierarchy reconciliation;
-- pack, budget, MOQ and capacity-aware order optimization.
+- analogue-pooled, censoring-corrected predictive demand estimation;
+- newsvendor-solved order quantities against a planner sell-through target.
 
-### Deep learning
+### Fashion matching
 
-The deep-learning layer owns:
+The visual-matching layer owns:
 
-- image/text embedding generation;
 - protected image fetching and validation;
-- FashionCLIP-compatible inference;
-- contrastive fine-tuning workflows.
+- FashionCLIP-compatible inference and embedding generation;
+- candidate retrieval, DINO reranking and colour/pattern gating.
 
-### AI orchestration
-
-`ai/recommendation_engine.py` loads the current artifact and coordinates product
-matching, demand forecasting and inventory-policy calculations. It does not
-contain model-training code or HTTP request schemas.
-
-## Training entry points
-
-Run from the repository root with `PYTHONPATH=backend/src`:
-
-```bash
-.venv/bin/python -m deep_learning.training.fine_tune_fashion_clip \
-  pairs.csv models/fashion-clip
-.venv/bin/python -m machine_learning.training.train_ranker \
-  ranker.parquet models/ranker.cbm
-.venv/bin/python -m machine_learning.training.train_demand \
-  demand.parquet models/demand
-.venv/bin/python -m machine_learning.training.build_hierarchy \
-  series.parquet models/hierarchy.json
-```
-
-Training requires multi-season datasets with a forward temporal holdout.
-Fallback algorithms are for integration and baseline analysis; they must not
-be represented as approved production models. Database-backed scale
-infrastructure is intentionally deferred and can be introduced in a future
-phase.
+See [../FASHION_MATCHING.md](../FASHION_MATCHING.md) for the full retrieval
+workflow.

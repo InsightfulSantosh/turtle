@@ -28,6 +28,9 @@ from typing import Any
 
 DAYS_PER_WEEK = 7.0
 P10_Z = 1.2815515655446004
+# Garments are ordered and packed in fixed lot sizes; every buy quantity in
+# this catalogue is rounded to a multiple of this.
+PACK_SIZE = 25
 
 
 @dataclass(frozen=True)
@@ -35,7 +38,11 @@ class DemandPolicy:
     """Tunable estimator settings kept out of the calculation code."""
 
     censor_sell_through: float = 0.95
-    minimum_group_rows: int = 8
+    # Not a hard cutoff: a group's own fit is blended toward its parent with
+    # weight rows/(rows + group_shrinkage_rows), so a category with, say, 7
+    # rows still keeps most of its own signal instead of a cliff at 8
+    # discarding it outright in favour of a much noisier parent.
+    group_shrinkage_rows: float = 8.0
     similarity_exponent: float = 4.0
     # Calibrated on the leave-one-out backtest: the sigma floor is what stops a
     # single strong analogue from implying a precision the data cannot support.
@@ -52,6 +59,31 @@ class DemandPolicy:
     # thin or conflicting evidence, not on ordinary uncertainty.
     wide_uncertainty_effective_n: float = 2.0
     wide_uncertainty_skew_ratio: float = 1.5
+    # A statistical sanity backstop against a degenerate model output, scaled
+    # per item type from what has actually been observed — not a substitute
+    # for a real manufacturing capacity limit, which can only come from the
+    # business. A flat catalogue-wide cap cannot be right for every item
+    # type: on this catalogue, per-item-type historical maxima range from
+    # ~150 to ~6,700 units, a 44x spread.
+    #
+    # 1.25x sits above every order and sales figure this catalogue has ever
+    # recorded, so the ceiling only ever catches a degenerate model output —
+    # it never truncates an outcome the business has actually achieved. An
+    # earlier 0.35x value scored marginally better on WMAPE but did so by
+    # clipping below real observed sales for 16.7% of historical products
+    # (6 of 7 OTWC products), which is a systematic distortion rather than a
+    # sanity bound. Forecast skew is corrected at its source instead, via
+    # point_estimate_skew below.
+    buy_ceiling_multiplier: float = 1.25
+    buy_ceiling_floor: float = 500.0
+    # The lognormal mean, exp(mu + sigma^2/2), is highly sensitive to sigma —
+    # and sigma here is deliberately inflated (floor 0.55, ceiling 1.50) to
+    # make the p10-p90 interval cover honestly. Using that same inflated sigma
+    # to build a *point* estimate overshoots: it pushed portfolio bias to +67
+    # units on the leave-one-out backtest. This exponent scales the skew
+    # correction (1.0 = full mean, 0.0 = median); 0.75 is the calibrated
+    # near-zero-bias point.
+    point_estimate_skew: float = 0.75
 
 
 DEFAULT_POLICY = DemandPolicy()
@@ -63,6 +95,10 @@ def _normal_cdf(value: float) -> float:
 
 def clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
+
+
+def round_pack(value: float, pack: int = PACK_SIZE) -> int:
+    return int(round(value / pack) * pack)
 
 
 def cleaned_sales(item: dict[str, Any]) -> float:
@@ -77,6 +113,61 @@ def cleaned_sales(item: dict[str, Any]) -> float:
     sales = max(float(item.get("sales") or 0), 0.0)
     supply = max(order, dispatch)
     return min(sales, supply) if supply > 0 else sales
+
+
+@dataclass(frozen=True)
+class BuyCeilings:
+    """Data-derived sanity ceiling per item type.
+
+    Replaces a fixed constant with a value that scales with what each item
+    type has actually shown it can sell or be ordered in, and that recomputes
+    automatically every time the artifact is rebuilt from new data — instead
+    of relying on someone to remember to update a hardcoded number as the
+    business changes.
+    """
+
+    by_item_type: dict[str, float]
+    global_ceiling: float
+    multiplier: float
+    floor: float
+
+    def ceiling_for(self, item: dict[str, Any]) -> float:
+        item_type = str(item.get("itemType") or "")
+        return self.by_item_type.get(item_type, self.global_ceiling)
+
+
+def fit_buy_ceilings(
+    history: Iterable[dict[str, Any]],
+    policy: DemandPolicy = DEFAULT_POLICY,
+) -> BuyCeilings:
+    """Derive a per-item-type buy ceiling from observed order/sales scale.
+
+    This is a statistical backstop against a degenerate model output, not a
+    substitute for a real production-capacity limit: nothing in sales history
+    reveals how many units a factory can actually run, so that number has to
+    come from the business, not from this function.
+    """
+
+    by_item_type_max: dict[str, float] = {}
+    global_max = 0.0
+    for item in history:
+        observed = max(
+            max(float(item.get("order") or 0), 0.0),
+            max(float(item.get("sales") or 0), 0.0),
+        )
+        item_type = str(item.get("itemType") or "")
+        by_item_type_max[item_type] = max(by_item_type_max.get(item_type, 0.0), observed)
+        global_max = max(global_max, observed)
+
+    def ceiling(observed_max: float) -> float:
+        return max(observed_max * policy.buy_ceiling_multiplier, policy.buy_ceiling_floor)
+
+    return BuyCeilings(
+        by_item_type={item_type: ceiling(observed) for item_type, observed in by_item_type_max.items()},
+        global_ceiling=ceiling(global_max),
+        multiplier=policy.buy_ceiling_multiplier,
+        floor=policy.buy_ceiling_floor,
+    )
 
 
 def weeks_on_floor(item: dict[str, Any], fallback_weeks: float) -> float:
@@ -156,6 +247,22 @@ def _fit_prior(log_rates: Sequence[float], level: str, floor_sigma: float) -> Ra
     return RatePrior(mu=mean, sigma=sigma, rows=count, level=level)
 
 
+def _shrink_prior(raw: RatePrior, parent: RatePrior, shrink_rows: float, level: str) -> RatePrior:
+    """Blend a group's own fit toward its parent, weighted by its row count.
+
+    weight = rows / (rows + shrink_rows) grows smoothly from 0 toward 1 as
+    evidence accumulates. A group that falls one row short of "enough data"
+    still keeps most of its own signal instead of a hard cutoff discarding it
+    outright in favour of a parent that may span far more diverse products.
+    """
+
+    weight = raw.rows / (raw.rows + shrink_rows)
+    mu = weight * raw.mu + (1.0 - weight) * parent.mu
+    variance = weight * raw.sigma**2 + (1.0 - weight) * parent.sigma**2
+    sigma = math.sqrt(max(variance, 0.0))
+    return RatePrior(mu=mu, sigma=sigma, rows=raw.rows, level=level)
+
+
 def _group_keys(item: dict[str, Any]) -> list[tuple[str, ...]]:
     item_type = str(item.get("itemType") or "UNSPECIFIED")
     category = str(item.get("categoryType") or "UNSPECIFIED")
@@ -172,9 +279,12 @@ class DemandPriors:
     policy: DemandPolicy
 
     def prior_for(self, item: dict[str, Any]) -> RatePrior:
+        # No row-count gate here: by_group already holds hierarchically
+        # shrunk priors (see fit_demand_priors), so the most specific key
+        # present is always safe to use directly.
         for key in _group_keys(item):
             prior = self.by_group.get(key)
-            if prior is not None and prior.rows >= self.policy.minimum_group_rows:
+            if prior is not None:
                 return prior
         return self.by_group[()]
 
@@ -216,23 +326,40 @@ def fit_demand_priors(
         raise ValueError("Cannot fit demand priors: no uncensored positive-rate history")
 
     global_prior = _fit_prior(grouped[()], "global", policy.minimum_log_sigma)
-    by_group = {
-        key: _fit_prior(values, "group" if len(key) == 2 else "itemType" if key else "global", policy.minimum_log_sigma)
-        for key, values in grouped.items()
+
+    def _level_name(key: tuple[str, ...]) -> str:
+        return "category" if len(key) == 2 else "itemType" if key else "global"
+
+    raw_fits = {
+        key: _fit_prior(values, _level_name(key), policy.minimum_log_sigma) for key, values in grouped.items()
     }
-    by_group[()] = global_prior
+
+    # Hierarchical shrinkage: a category blends its own rows toward its
+    # item-type's prior, which itself blends toward the global prior. This
+    # replaces an all-or-nothing row-count cutoff with a graduated one, so a
+    # category that falls one row short of "enough data" keeps most of its
+    # own signal instead of inheriting the full spread of every other product
+    # in the catalogue.
+    by_group: dict[tuple[str, ...], RatePrior] = {(): global_prior}
+    for key in sorted(key for key in raw_fits if len(key) == 1):
+        by_group[key] = _shrink_prior(raw_fits[key], global_prior, policy.group_shrinkage_rows, "itemType")
+    for key in sorted(key for key in raw_fits if len(key) == 2):
+        parent = by_group.get((key[0],), global_prior)
+        by_group[key] = _shrink_prior(raw_fits[key], parent, policy.group_shrinkage_rows, "category")
 
     # Empirical-Bayes shrinkage: how many analogues are worth as much as the
-    # group prior. Groups that differ sharply from one another (large between
-    # variance) trust their own analogues sooner.
+    # group prior. Estimated from the raw (unblended) category fits so the
+    # hierarchy above doesn't feed back into its own calibration. Groups that
+    # differ sharply from one another (large between variance) trust their
+    # own analogues sooner.
     leaf_groups = [
-        (key, values)
-        for key, values in grouped.items()
-        if len(key) == 2 and len(values) >= policy.minimum_group_rows
+        (key, raw_fits[key])
+        for key in raw_fits
+        if len(key) == 2 and raw_fits[key].rows >= policy.group_shrinkage_rows
     ]
     if len(leaf_groups) >= 2:
-        within = [by_group[key].sigma ** 2 for key, _ in leaf_groups]
-        means = [by_group[key].mu for key, _ in leaf_groups]
+        within = [prior.sigma ** 2 for _, prior in leaf_groups]
+        means = [prior.mu for _, prior in leaf_groups]
         mean_of_means = sum(means) / len(means)
         between = sum((value - mean_of_means) ** 2 for value in means) / (len(means) - 1)
         average_within = sum(within) / len(within)
@@ -292,10 +419,11 @@ def serialize_priors(priors: DemandPriors) -> dict[str, Any]:
         "minimumLogSigma": priors.policy.minimum_log_sigma,
         "maximumLogSigma": priors.policy.maximum_log_sigma,
         "censorSellThrough": priors.policy.censor_sell_through,
-        "minimumGroupRows": priors.policy.minimum_group_rows,
+        "groupShrinkageRows": priors.policy.group_shrinkage_rows,
         "maximumAnalogues": priors.policy.maximum_analogues,
         "wideUncertaintyEffectiveN": priors.policy.wide_uncertainty_effective_n,
         "wideUncertaintySkewRatio": priors.policy.wide_uncertainty_skew_ratio,
+        "pointEstimateSkew": priors.policy.point_estimate_skew,
         "groups": {
             "|".join(key): {
                 "mu": round(prior.mu, 6),
@@ -307,6 +435,17 @@ def serialize_priors(priors: DemandPriors) -> dict[str, Any]:
     }
 
 
+def serialize_buy_ceilings(ceilings: BuyCeilings) -> dict[str, Any]:
+    """Export the fitted buy ceilings so the frontend mirrors the same cap."""
+
+    return {
+        "byItemType": {item_type: round(value, 2) for item_type, value in ceilings.by_item_type.items()},
+        "globalCeiling": round(ceilings.global_ceiling, 2),
+        "multiplier": ceilings.multiplier,
+        "floor": ceilings.floor,
+    }
+
+
 @dataclass(frozen=True)
 class DemandPrediction:
     """A predictive demand distribution, not a copied observation."""
@@ -315,6 +454,11 @@ class DemandPrediction:
     horizon_weeks: float
     median_demand: float
     mean_demand: float
+    # The headline point forecast: the mean's skew correction scaled by
+    # policy.point_estimate_skew, sitting between median_demand (no
+    # correction) and mean_demand (full). See DemandPolicy for why the raw
+    # mean overshoots here.
+    point_demand: float
     p10: float
     p90: float
     log_mu: float
@@ -393,6 +537,7 @@ def predict_demand(
         horizon_weeks=horizon,
         median_demand=math.exp(demand_log_mu),
         mean_demand=math.exp(demand_log_mu + log_sigma**2 / 2.0),
+        point_demand=math.exp(demand_log_mu + policy.point_estimate_skew * log_sigma**2 / 2.0),
         p10=math.exp(demand_log_mu - P10_Z * log_sigma),
         p90=math.exp(demand_log_mu + P10_Z * log_sigma),
         log_mu=demand_log_mu,
