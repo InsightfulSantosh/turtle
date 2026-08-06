@@ -1,9 +1,0 @@
--r requirements.txt
-ftfy>=6.3,<7
-httpx>=0.28,<1
-open-clip-torch>=3.2,<4
-Pillow>=11,<12
-faiss-cpu>=1.8,<2; platform_system != "Darwin"
-qdrant-client>=1.14,<2
-torch>=2.7,<3
-transformers>=4.52,<5
