@@ -17,20 +17,23 @@ than production certification.
 
 ```text
 turtle/
-├── frontend/                         Next.js planner application
-│   ├── app/                          Pages, styles and generated-data.json
-│   ├── public/                       Static assets
-│   └── tests/                        Frontend and artifact-contract tests
-├── backend/                          Python data-science pipeline (no live API)
+├── DATA/                              Raw workbooks/images in, cleaned CSVs out (see Central configuration)
+│   ├── raw/                           Source .xlsb workbooks and matched product images
+│   └── processed/                     Cleaned CSVs and the validation report
+├── frontend/                          Next.js planner application
+│   ├── app/                           Pages, styles and generated-data.json
+│   ├── public/                        Static assets
+│   └── tests/                         Frontend and artifact-contract tests
+├── backend/                           Python data-science pipeline (no live API)
 │   ├── src/
-│   │   ├── core/                     Central configuration and paths
-│   │   ├── data_pipeline/            Workbook validation and preparation
-│   │   ├── fashion_matching/         Visual retrieval, encoding and image validation
-│   │   └── machine_learning/         Analogue similarity and predictive demand models
-│   └── tests/                        Backend unit and contract tests
-├── requirements.txt                  Single source of truth for backend dependencies
-├── pyproject.toml                    Backend package, pytest and ruff configuration
-└── Makefile                          Central developer commands
+│   │   ├── core/                      Central configuration and paths
+│   │   ├── data_pipeline/             Workbook validation and preparation
+│   │   ├── fashion_matching/          Visual retrieval, encoding and image validation
+│   │   └── machine_learning/          Analogue similarity and predictive demand models
+│   └── tests/                         Backend unit and contract tests
+├── requirements.txt                   Single source of truth for backend dependencies
+├── pyproject.toml                     Backend package, pytest and ruff configuration
+└── Makefile                           Central developer commands
 ```
 
 The dependency direction is intentional:
