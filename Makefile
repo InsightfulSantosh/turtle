@@ -4,7 +4,7 @@ BACKEND_PYTHONPATH := backend/src
 .PHONY: backend-test data data-vision fashion-evaluate fashion-index fashion-match frontend-build frontend-dev frontend-test qdrant test
 
 backend-test:
-	cd backend && PYTHONPATH=src ../$(PYTHON) -m pytest -q
+	PYTHONPATH=$(BACKEND_PYTHONPATH) $(PYTHON) -m pytest -q
 
 data:
 	PYTHONPATH=$(BACKEND_PYTHONPATH) $(PYTHON) -m data_pipeline.prepare_real_data
