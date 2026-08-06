@@ -102,6 +102,11 @@ def build_historical_features(
             "dispatch": parse_integer(row["dispatch_quantity"]),
             "sales": parse_integer(row["sales_quantity"]),
             "sellThrough": round(parse_number(row["sell_through"]), 6),
+            # Exposure fields. Demand estimation needs to know how long a
+            # product was sellable: identical sales over 109 and 382 days are
+            # not identical demand.
+            "ageingDays": parse_integer(row.get("ageing_days")),
+            "weeklySellThrough": round(parse_number(row.get("weekly_sell_through")), 8),
         })
     return historical, duplicates_removed
 

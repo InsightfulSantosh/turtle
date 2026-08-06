@@ -8,6 +8,16 @@ from typing import Any
 
 import numpy as np
 
+from machine_learning.demand import (
+    DemandPriors,
+    annotate_history_rates,
+    cleaned_sales,
+    fit_demand_priors,
+    newsvendor_order,
+    predict_demand,
+    serialize_priors,
+)
+
 MODEL_VERSION = "5.1.0"
 PACK_SIZE = 25
 MAX_BUY = 2_000
@@ -43,16 +53,11 @@ def quality_flags(item: dict[str, Any]) -> list[str]:
 def sales_target(item: dict[str, Any]) -> float:
     """Return cleaned observed unit sales for model training.
 
-    The supplied sample has one row where sales exceed both order and dispatch.
-    Until opening inventory and transfer data are available, cap that row at the
-    strongest observable supply value so it cannot dominate a 33-row pilot.
+    Sales above both order and dispatch cannot be demand the business served,
+    so they are capped at the strongest observable supply value.
     """
 
-    order = max(float(item.get("order") or 0), 0)
-    dispatch = max(float(item.get("dispatch") or 0), 0)
-    sales = max(float(item.get("sales") or 0), 0)
-    supply = max(order, dispatch)
-    return min(sales, supply) if supply > 0 else sales
+    return cleaned_sales(item)
 
 
 @dataclass(frozen=True)
@@ -121,8 +126,16 @@ def recommend_one(
     *,
     target_sell_through: float = DEFAULT_TARGET_SELL_THROUGH,
     minimum_visual_score: float = MIN_CONVINCING_VISUAL_SCORE,
+    demand_priors: DemandPriors | None = None,
 ) -> dict[str, Any]:
-    """Calculate one buy from one accepted visual analogue only."""
+    """Calculate one buy from the accepted visual analogue evidence.
+
+    With ``demand_priors`` omitted this keeps the legacy single-analogue rule:
+    republish the top analogue's cleaned sales and divide by the sell-through
+    target. Supplying priors switches on the predictive estimator, which pools
+    the accepted analogues, corrects for stock-outs and exposure, and solves
+    the buy against the target under uncertainty.
+    """
 
     selected = matches[:1]
     history_by_id = {str(historical["id"]): historical for historical in history}
@@ -142,30 +155,97 @@ def recommend_one(
         minimum_visual_score,
     )
     historical_order = 0.0
+    analogue_sales = 0
+    prediction = None
     if no_suitable_match or selected_history is None:
         expected_sales = 0
         quantity = 0
+        sales_low = sales_high = 0
+        order_low = order_high = 0
     else:
-        expected_sales = int(clamp(round_pack(sales_target(selected_history)), 0, MAX_BUY))
         historical_order = max(float(selected_history.get("order") or 0), 0.0)
-        quantity = int(
-            clamp(
-                round_pack(expected_sales / max(target_sell_through, 0.01)),
-                0,
-                MAX_BUY,
-            )
+        analogue_sales = int(clamp(round_pack(sales_target(selected_history)), 0, MAX_BUY))
+        accepted = [
+            match
+            for match in matches
+            if match.get("visualScore") is not None
+            and math.floor(float(match["visualScore"]) * 100 + 0.5)
+            >= math.floor(minimum_visual_score * 100 + 0.5)
+        ]
+        prediction = (
+            predict_demand(item, accepted, history_by_id, demand_priors)
+            if demand_priors is not None and accepted
+            else None
         )
-    return {
+        if prediction is None:
+            # Legacy rule: republish the analogue's own sales as the forecast.
+            expected_sales = analogue_sales
+            sales_low = sales_high = expected_sales
+            quantity = int(
+                clamp(
+                    round_pack(expected_sales / max(target_sell_through, 0.01)),
+                    0,
+                    MAX_BUY,
+                )
+            )
+            order_low = order_high = quantity
+        else:
+            expected_sales = int(clamp(round_pack(prediction.mean_demand), 0, MAX_BUY))
+            sales_low = int(clamp(round_pack(prediction.p10), 0, MAX_BUY))
+            sales_high = int(clamp(round_pack(prediction.p90), 0, MAX_BUY))
+            quantity = int(
+                clamp(
+                    round_pack(
+                        newsvendor_order(
+                            prediction.log_mu,
+                            prediction.log_sigma,
+                            target_sell_through,
+                        )
+                    ),
+                    0,
+                    MAX_BUY,
+                )
+            )
+            # Order band: what the buy would be if demand landed at the low or
+            # high end of the predicted range, not a cosmetic +/- on quantity.
+            order_low = int(
+                clamp(
+                    round_pack(
+                        newsvendor_order(
+                            math.log(max(prediction.p10, 1e-6)),
+                            prediction.log_sigma,
+                            target_sell_through,
+                        )
+                    ),
+                    0,
+                    MAX_BUY,
+                )
+            )
+            order_high = int(
+                clamp(
+                    round_pack(
+                        newsvendor_order(
+                            math.log(max(prediction.p90, 1e-6)),
+                            prediction.log_sigma,
+                            target_sell_through,
+                        )
+                    ),
+                    0,
+                    MAX_BUY,
+                )
+            )
+
+    result = {
         "quantity": quantity,
-        "low": quantity,
-        "high": quantity,
+        "low": order_low,
+        "high": order_high,
         "expectedSales": expected_sales,
-        "salesLow": expected_sales,
-        "salesHigh": expected_sales,
+        "salesLow": sales_low,
+        "salesHigh": sales_high,
         "matchConfidence": relevance,
         "noSuitableMatch": no_suitable_match,
         "confidence": relevance,
-        "analogueSales": expected_sales,
+        "analogueSales": analogue_sales,
         "analogueQuantity": int(clamp(round_pack(historical_order), 0, MAX_BUY)) if selected_history else 0,
         "targetSellThrough": target_sell_through,
         "minimumVisualScore": minimum_visual_score,
@@ -173,6 +253,47 @@ def recommend_one(
         "topMatchScore": round(top_scores[0] if top_scores else 0.0, 4),
         "modelVersion": MODEL_VERSION,
     }
+    if prediction is not None:
+        result["evidencePolicy"] = "pooled_visual_analogue_forecast"
+        # mean/median diverge whenever the distribution is right-skewed
+        # (mean/median = exp(logSigma^2/2) for a lognormal), which is exactly
+        # when a single headline number stops being self-explanatory: the mean
+        # is the statistically correct point estimate to buy against (it is
+        # what the newsvendor solve and the validated backtest both use), but
+        # it can sit well above the *typical* outcome a planner would expect.
+        median_demand = int(clamp(round_pack(prediction.median_demand), 0, MAX_BUY))
+        skew_ratio = prediction.mean_demand / max(prediction.median_demand, 1e-6)
+        policy = demand_priors.policy if demand_priors is not None else None
+        wide_uncertainty = policy is not None and (
+            prediction.effective_sample_size < policy.wide_uncertainty_effective_n
+            or skew_ratio >= policy.wide_uncertainty_skew_ratio
+        )
+        # Diagnostics a planner can audit: how much of the number came from the
+        # analogues versus the group prior, and how thin that evidence was.
+        result["demand"] = {
+            "weeklyRate": round(prediction.weekly_rate, 3),
+            "horizonWeeks": round(prediction.horizon_weeks, 1),
+            "analoguesUsed": prediction.analogues_used,
+            "effectiveSampleSize": round(prediction.effective_sample_size, 2),
+            "analogueWeight": round(prediction.shrinkage_weight, 3),
+            "priorWeeklyRate": round(prediction.prior_weekly_rate, 3),
+            "censoredAnalogues": prediction.censored_analogues,
+            # medianDemand is the typical (P50) outcome; expectedSales above
+            # stays the mean, because that is the unbiased point estimate the
+            # order quantity and the validated backtest are built on. Showing
+            # both, plus the ratio between them, is what makes a skewed case
+            # like "expectedSales far above quantity" self-explanatory instead
+            # of looking like a bug.
+            "medianDemand": median_demand,
+            "skewRatio": round(skew_ratio, 3),
+            "wideUncertainty": wide_uncertainty,
+            # The predictive distribution itself, so the UI can re-solve the
+            # newsvendor when the planner moves the sell-through slider
+            # instead of falling back to the legacy division.
+            "logMu": round(prediction.log_mu, 6),
+            "logSigma": round(prediction.log_sigma, 6),
+        }
+    return result
 
 
 def blend_two_stage_visual_scores(
@@ -234,7 +355,19 @@ def _candidate_calibration_values(
     ]
 
 
-def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) -> dict[str, Any]:
+def build_model_artifact(
+    source: dict[str, Any],
+    vision_output: dict[str, Any],
+    *,
+    demand_forecast: bool = False,
+) -> dict[str, Any]:
+    """Build the frontend artifact.
+
+    ``demand_forecast`` switches the buy from the legacy copy-one-analogue rule
+    to the pooled predictive estimator. It is off by default so the shipped
+    artifact only changes when that policy change is deliberately made.
+    """
+
     history = [dict(item) for item in source["historical"]]
     upcoming = [dict(item) for item in source["upcoming"]]
     rows = vision_output.get("distances", [])
@@ -368,6 +501,11 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
         item["salesTarget"] = round(float(target), 4)
         item["qualityFlags"] = quality_flags(item)
 
+    # Priors are fitted once from the whole historical catalogue, before any
+    # upcoming product is scored, so every buy shares one auditable prior.
+    demand_priors = fit_demand_priors(history) if demand_forecast else None
+    if demand_priors is not None:
+        annotate_history_rates(history, demand_priors)
     match_confidence_counts = {"High": 0, "Medium": 0, "Low": 0}
     all_visual_scores: list[float] = []
     retrieval_history = [historical for historical in history if historical.get("imageUrl")] or history
@@ -440,6 +578,7 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
             history,
             matches,
             {"topK": 4},
+            demand_priors=demand_priors,
         )
         item["matches"] = matches[:4]
         model_flags = list(item.get("modelFlags", []))
@@ -484,15 +623,33 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
             },
             "model": {
                 "version": MODEL_VERSION,
-                "status": "Visual-only single-analogue decision model",
+                "status": (
+                    "Visual retrieval + pooled demand forecast"
+                    if demand_priors is not None
+                    else "Visual-only single-analogue decision model"
+                ),
                 "algorithm": (
                     "FashionSigLIP retrieval + multi-scale DINO, dominant-palette "
                     "CIEDE2000 colour and pattern gates + texture reranking"
                 ),
-                "evidencePolicy": "single_top_visual_analogue",
-                "salesPolicy": "Use cleaned sales from the single accepted historical visual analogue",
-                "orderPolicy": "Divide the selected analogue's cleaned sales by the target sell-through",
-                "noMachineLearningForecast": True,
+                "evidencePolicy": (
+                    "pooled_visual_analogue_forecast"
+                    if demand_priors is not None
+                    else "single_top_visual_analogue"
+                ),
+                "salesPolicy": (
+                    "Similarity-weighted, censoring-corrected demand pooled across accepted "
+                    "analogues and shrunk toward the item-type/category prior"
+                    if demand_priors is not None
+                    else "Use cleaned sales from the single accepted historical visual analogue"
+                ),
+                "orderPolicy": (
+                    "Newsvendor buy whose expected sell-through equals the planner target "
+                    "under the predicted demand distribution"
+                    if demand_priors is not None
+                    else "Divide the selected analogue's cleaned sales by the target sell-through"
+                ),
+                "noMachineLearningForecast": demand_priors is None,
                 "noAttributeMatching": True,
                 "visualOnlyRanking": True,
                 "dinoRerankWeight": round(selected_dino_weight, 2),
@@ -504,6 +661,11 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
                 ),
                 "targetSellThrough": DEFAULT_TARGET_SELL_THROUGH,
                 "topK": 4,
+                **(
+                    {"demandModel": serialize_priors(demand_priors)}
+                    if demand_priors is not None
+                    else {}
+                ),
             },
             "visionCalibration": {
                 "medianDistance": round(serving_calibration.median, 4),

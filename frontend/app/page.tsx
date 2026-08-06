@@ -24,6 +24,29 @@ type HistoricalItem = {
   hasVisualFeature: boolean;
   salesTarget: number;
   qualityFlags: string[];
+  /** Log of the censoring-corrected weekly demand rate; absent on legacy artifacts. */
+  weeklyLogRate?: number | null;
+  demandCensored?: boolean;
+};
+
+type DemandPrior = {
+  mu: number;
+  sigma: number;
+  rows: number;
+};
+
+type DemandModel = {
+  horizonWeeks: number;
+  shrinkageTau: number;
+  similarityExponent: number;
+  minimumLogSigma: number;
+  maximumLogSigma: number;
+  censorSellThrough: number;
+  minimumGroupRows: number;
+  maximumAnalogues: number;
+  wideUncertaintyEffectiveN: number;
+  wideUncertaintySkewRatio: number;
+  groups: Record<string, DemandPrior>;
 };
 
 type Match = {
@@ -162,6 +185,8 @@ type Dataset = {
       minimumMatchConfidence: Confidence;
       noMatchPolicy: string;
       topK: number;
+      /** Present only when the artifact was built with the predictive estimator. */
+      demandModel?: DemandModel;
     };
   };
   historical: HistoricalItem[];
@@ -183,6 +208,8 @@ type Decision = {
   salesHigh: number;
   analogueSales: number;
   analogueQuantity: number;
+  /** Null when the legacy copy-one-analogue rule produced the numbers. */
+  forecast: DemandForecast | null;
 };
 
 const dataset = dataJson as unknown as Dataset;
@@ -244,6 +271,162 @@ function packRounded(value: number) {
   return Math.max(0, Math.min(2000, Math.round(value / 25) * 25));
 }
 
+const P10_Z = 1.2815515655446004;
+
+// Abramowitz & Stegun 7.1.26. The estimator only needs CDF accuracy to ~1e-7,
+// which is far finer than a buy rounded to packs of 25.
+function erf(value: number) {
+  const sign = value < 0 ? -1 : 1;
+  const x = Math.abs(value);
+  const t = 1 / (1 + 0.3275911 * x);
+  const y =
+    1 -
+    ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) *
+      t *
+      Math.exp(-x * x);
+  return sign * y;
+}
+
+function normalCdf(value: number) {
+  return 0.5 * (1 + erf(value / Math.SQRT2));
+}
+
+/** E[min(D, Q)] for lognormal demand: expected sales saturate above demand. */
+function expectedSalesAt(orderQuantity: number, logMu: number, logSigma: number) {
+  if (orderQuantity <= 0) return 0;
+  if (logSigma <= 1e-9) return Math.min(Math.exp(logMu), orderQuantity);
+  const z = (Math.log(orderQuantity) - logMu) / logSigma;
+  const mean = Math.exp(logMu + (logSigma * logSigma) / 2);
+  return mean * normalCdf(z - logSigma) + orderQuantity * (1 - normalCdf(z));
+}
+
+/**
+ * The buy whose expected sell-through equals the planner target.
+ * With logSigma = 0 this returns exactly demand / target, so the legacy rule
+ * is this function's no-uncertainty special case.
+ */
+function newsvendorOrder(logMu: number, logSigma: number, targetSellThrough: number) {
+  const target = Math.max(0.01, Math.min(0.99, targetSellThrough));
+  let low = 1e-6;
+  let high = Math.max(Math.exp(logMu + (logSigma * logSigma) / 2) / target, 1);
+  for (let step = 0; step < 60; step += 1) {
+    if (expectedSalesAt(high, logMu, logSigma) / high <= target) break;
+    high *= 2;
+  }
+  for (let step = 0; step < 200; step += 1) {
+    const middle = (low + high) / 2;
+    if (expectedSalesAt(middle, logMu, logSigma) / middle > target) low = middle;
+    else high = middle;
+  }
+  return (low + high) / 2;
+}
+
+const demandModel = dataset.meta.model.demandModel;
+
+function priorFor(item: ComparableProduct): DemandPrior | undefined {
+  if (!demandModel) return undefined;
+  const keys = [`${item.itemType}|${item.categoryType}`, item.itemType, ""];
+  for (const key of keys) {
+    const prior = demandModel.groups[key];
+    if (prior && prior.rows >= demandModel.minimumGroupRows) return prior;
+  }
+  return demandModel.groups[""];
+}
+
+type DemandForecast = {
+  expectedSales: number;
+  medianDemand: number;
+  skewRatio: number;
+  wideUncertainty: boolean;
+  salesLow: number;
+  salesHigh: number;
+  quantity: number;
+  low: number;
+  high: number;
+  analoguesUsed: number;
+  analogueWeight: number;
+  logSigma: number;
+};
+
+/**
+ * Pool the accepted analogues into a shrunk predictive distribution.
+ * Mirrors machine_learning/demand.py so the planner's sliders keep re-solving
+ * the estimator rather than silently reverting to the legacy division.
+ */
+function forecastDemand(
+  item: UpcomingItem,
+  accepted: RankedMatch[],
+  targetSellThrough: number,
+): DemandForecast | null {
+  if (!demandModel) return null;
+  const prior = priorFor(item);
+  if (!prior) return null;
+
+  const weights: number[] = [];
+  const logRates: number[] = [];
+  for (const match of accepted.slice(0, demandModel.maximumAnalogues)) {
+    const historical = historyById.get(match.historicalId);
+    const logRate = historical?.weeklyLogRate;
+    if (logRate === null || logRate === undefined) continue;
+    weights.push(Math.pow(Math.max(match.combinedScore, 1e-6), demandModel.similarityExponent));
+    logRates.push(logRate);
+  }
+  if (!logRates.length) return null;
+
+  const totalWeight = weights.reduce((sum, weight) => sum + weight, 0);
+  const weightedMean = logRates.reduce((sum, rate, index) => sum + weights[index] * rate, 0) / totalWeight;
+  // Kish effective sample size: four near-identical analogues carry more
+  // evidence than four where one dominates the weighting.
+  const effectiveN = (totalWeight * totalWeight) / weights.reduce((sum, weight) => sum + weight * weight, 0);
+  const observedVariance =
+    logRates.length > 1
+      ? logRates.reduce((sum, rate, index) => sum + weights[index] * (rate - weightedMean) ** 2, 0) / totalWeight
+      : prior.sigma * prior.sigma;
+
+  const shrinkage = effectiveN / (effectiveN + demandModel.shrinkageTau);
+  const logMuRate = shrinkage * weightedMean + (1 - shrinkage) * prior.mu;
+  const coreVariance =
+    (effectiveN * observedVariance + demandModel.shrinkageTau * prior.sigma * prior.sigma) /
+    (effectiveN + demandModel.shrinkageTau);
+  // A single analogue is not certainty: carrying the estimation variance of
+  // the pooled mean is what stops one row from implying a point forecast.
+  const logSigma = Math.max(
+    demandModel.minimumLogSigma,
+    Math.min(
+      demandModel.maximumLogSigma,
+      Math.sqrt(coreVariance * (1 + 1 / (effectiveN + demandModel.shrinkageTau))),
+    ),
+  );
+
+  const logMu = logMuRate + Math.log(demandModel.horizonWeeks);
+  const p10 = Math.exp(logMu - P10_Z * logSigma);
+  const p90 = Math.exp(logMu + P10_Z * logSigma);
+  const medianDemand = Math.exp(logMu);
+  const meanDemand = Math.exp(logMu + (logSigma * logSigma) / 2);
+  // mean/median = exp(logSigma^2/2) for a lognormal: this ratio grows purely
+  // from uncertainty. When it (or the effective analogue count) crosses the
+  // policy threshold, expectedSales (the mean, kept as the unbiased point
+  // estimate the order is solved against) can sit far above the typical
+  // outcome — flag it rather than showing both numbers with equal confidence.
+  const skewRatio = meanDemand / Math.max(medianDemand, 1e-6);
+  const wideUncertainty =
+    effectiveN < demandModel.wideUncertaintyEffectiveN || skewRatio >= demandModel.wideUncertaintySkewRatio;
+  return {
+    expectedSales: packRounded(meanDemand),
+    medianDemand: packRounded(medianDemand),
+    skewRatio,
+    wideUncertainty,
+    salesLow: packRounded(p10),
+    salesHigh: packRounded(p90),
+    quantity: packRounded(newsvendorOrder(logMu, logSigma, targetSellThrough)),
+    low: packRounded(newsvendorOrder(Math.log(Math.max(p10, 1e-6)), logSigma, targetSellThrough)),
+    high: packRounded(newsvendorOrder(Math.log(Math.max(p90, 1e-6)), logSigma, targetSellThrough)),
+    analoguesUsed: logRates.length,
+    analogueWeight: shrinkage,
+    logSigma,
+  };
+}
+
 function makeDecision(
   item: UpcomingItem,
   minimumSimilarity = dataset.meta.model.minimumVisualScore,
@@ -279,26 +462,28 @@ function makeDecision(
     topVisualScore === null ||
     topVisualScore === undefined ||
     displayedScore < displayedCriterion;
-  const expectedSales = noSuitableMatch || !historical
+  const analogueSales = noSuitableMatch || !historical ? 0 : packRounded(historical.salesTarget);
+  // The forecast pools every accepted analogue. Selecting one analogue changes
+  // which product is shown as evidence, not which single row the buy copies.
+  const forecast = noSuitableMatch ? null : forecastDemand(item, eligible, targetSellThrough);
+  const legacyQuantity = noSuitableMatch
     ? 0
-    : packRounded(historical.salesTarget);
-  const quantity = noSuitableMatch
-    ? 0
-    : packRounded(expectedSales / Math.max(targetSellThrough, 0.01));
+    : packRounded(analogueSales / Math.max(targetSellThrough, 0.01));
   return {
     ranked,
     eligible,
     selectedMatch,
-    quantity,
-    low: quantity,
-    high: quantity,
+    quantity: forecast ? forecast.quantity : legacyQuantity,
+    low: forecast ? forecast.low : legacyQuantity,
+    high: forecast ? forecast.high : legacyQuantity,
     matchConfidence,
     noSuitableMatch,
-    expectedSales,
-    salesLow: expectedSales,
-    salesHigh: expectedSales,
-    analogueSales: expectedSales,
+    expectedSales: forecast ? forecast.expectedSales : analogueSales,
+    salesLow: forecast ? forecast.salesLow : analogueSales,
+    salesHigh: forecast ? forecast.salesHigh : analogueSales,
+    analogueSales,
     analogueQuantity: noSuitableMatch || !historical ? 0 : packRounded(historical.order),
+    forecast,
   };
 }
 
@@ -570,7 +755,11 @@ function App() {
         "Style similarity",
         "Texture similarity",
         "Match confidence",
-        "Matched product sales",
+        "Forecast demand",
+        "Forecast low (p10)",
+        "Forecast high (p90)",
+        "Analogue actual sales",
+        "Analogue original order",
         "AI recommended quantity",
         "Planner quantity",
         "Approval status",
@@ -594,6 +783,10 @@ function App() {
           scoreValue(top?.textureVisualScore),
           itemDecision.matchConfidence,
           itemDecision.expectedSales,
+          itemDecision.salesLow,
+          itemDecision.salesHigh,
+          itemDecision.analogueSales,
+          itemDecision.analogueQuantity,
           itemDecision.quantity,
           overrides[item.id] ?? "",
           approvedIds[item.id] ? "Approved" : "Pending",
@@ -766,6 +959,14 @@ function App() {
                     {decision.noSuitableMatch
                       ? <NoMatchPill />
                       : <MatchConfidencePill confidence={decision.matchConfidence} detailed />}
+                    {decision.forecast?.wideUncertainty && (
+                      <span
+                        className="warning-chip"
+                        title="Thin or conflicting evidence: the average forecast is pulled well above the typical outcome. Treat the range, not the headline number, as the estimate."
+                      >
+                        Wide uncertainty
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="quantity-hero">
@@ -775,12 +976,25 @@ function App() {
                       <strong>{numberFormatter.format(finalQuantity)}</strong>
                       <span>units</span>
                     </div>
-                    <p>Selected product's sales ÷ {Math.round(targetSellThrough * 100)}% target sell-through</p>
+                    <p>
+                      {decision.forecast
+                        ? `Buy that reaches ${Math.round(targetSellThrough * 100)}% expected sell-through · ${numberFormatter.format(decision.low)}–${numberFormatter.format(decision.high)} across the demand range`
+                        : `Selected product's sales ÷ ${Math.round(targetSellThrough * 100)}% target sell-through`}
+                    </p>
                   </div>
                   <div className="quantity-secondary">
-                    <small>Matched product sales</small>
+                    <small>{decision.forecast ? "Forecast demand (average)" : "Matched product sales"}</small>
                     <strong>{numberFormatter.format(decision.expectedSales)} units</strong>
-                    <span>Cleaned observed sales from the one selected historical product</span>
+                    <span>
+                      {decision.forecast
+                        ? `80% range ${numberFormatter.format(decision.salesLow)}–${numberFormatter.format(decision.salesHigh)} · pooled from ${decision.forecast.analoguesUsed} analogue${decision.forecast.analoguesUsed === 1 ? "" : "s"}`
+                        : "Cleaned observed sales from the one selected historical product"}
+                    </span>
+                    {decision.forecast?.wideUncertainty && (
+                      <span className="wide-uncertainty-note">
+                        Typical outcome ≈ {numberFormatter.format(decision.forecast.medianDemand)} units — the average is pulled up by a small chance of much higher demand.
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="match-confidence-row">
@@ -798,9 +1012,21 @@ function App() {
                         No historical product cleared the visual-match threshold. No sales or order quantity is generated; planner review is required.
                       </>
                     ) : (
-                      <>
-                        This single matched product recorded <b>{numberFormatter.format(decision.expectedSales)} cleaned sales units</b>. At a <b>{Math.round(targetSellThrough * 100)}% target sell-through</b>, that implies a starting order of <b>{numberFormatter.format(decision.quantity)} units</b> — confirm with planner judgment below.
-                      </>
+                      decision.forecast ? (
+                        <>
+                          Demand is forecast at <b>{numberFormatter.format(decision.expectedSales)} units</b> (80% range {numberFormatter.format(decision.salesLow)}–{numberFormatter.format(decision.salesHigh)}), pooled from <b>{decision.forecast.analoguesUsed} accepted {decision.forecast.analoguesUsed === 1 ? "analogue" : "analogues"}</b> and corrected for how long each one was on the floor. {Math.round(decision.forecast.analogueWeight * 100)}% of the estimate comes from those analogues and the rest from the {selected.itemType}/{selected.categoryType} baseline.{" "}
+                          {decision.forecast.wideUncertainty && (
+                            <>
+                              This evidence is thin or conflicting, so the average is skewed well above the typical case — expect <b>{numberFormatter.format(decision.forecast.medianDemand)} units</b> more often than {numberFormatter.format(decision.expectedSales)}, with real odds of either extreme.{" "}
+                            </>
+                          )}
+                          Buying <b>{numberFormatter.format(decision.quantity)} units</b> reaches a <b>{Math.round(targetSellThrough * 100)}% expected sell-through</b> — confirm with planner judgment below.
+                        </>
+                      ) : (
+                        <>
+                          This single matched product recorded <b>{numberFormatter.format(decision.expectedSales)} cleaned sales units</b>. At a <b>{Math.round(targetSellThrough * 100)}% target sell-through</b>, that implies a starting order of <b>{numberFormatter.format(decision.quantity)} units</b> — confirm with planner judgment below.
+                        </>
+                      )
                     )}
                   </p>
                 </div>
@@ -907,7 +1133,11 @@ function App() {
                     onChange={(event) => changeTargetSellThrough(Number(event.target.value) / 100)}
                     aria-label="Target sell-through"
                   />
-                  <small className="setting-help">Recommended order = selected product sales ÷ target sell-through, rounded to packs of 25.</small>
+                  <small className="setting-help">
+                    {demandModel
+                      ? "The buy is solved so expected sales reach this share of it, given the forecast range. Rounded to packs of 25."
+                      : "Recommended order = selected product sales ÷ target sell-through, rounded to packs of 25."}
+                  </small>
                 </label>
                 {focusedHistory && focusedMatch ? (
                   <aside className="evidence-summary" aria-label="Similarity score summary">
@@ -951,7 +1181,9 @@ function App() {
                     Recommended historical analogues
                   </span>
                   <h2>
-                    Select one product to calculate the order quantity
+                    {demandModel
+                      ? "Every accepted analogue feeds the forecast; select one to compare it"
+                      : "Select one product to calculate the order quantity"}
                   </h2>
                   {decision.noSuitableMatch && (
                     <p className="section-supporting-copy">
@@ -1084,7 +1316,7 @@ function App() {
           </div>
           <div className="portfolio-table-wrap">
             <table className="portfolio-table">
-              <thead><tr><th>Upcoming style</th><th>Product attributes</th><th>Top historical analogue</th><th>Match score</th><th>Decision signals</th><th>Expected sales</th><th>Recommended order</th><th>Planner order</th><th><span className="sr-only">Actions</span></th></tr></thead>
+              <thead><tr><th>Upcoming style</th><th>Product attributes</th><th>Top historical analogue</th><th>Match score</th><th>Decision signals</th><th>{demandModel ? "Forecast demand" : "Expected sales"}</th><th>Recommended order</th><th>Planner order</th><th><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>
                 {queueItems.length === 0 && (
                   <tr className="table-empty-row">
@@ -1115,8 +1347,26 @@ function App() {
                         )}
                       </td>
                       <td><div className="table-signals">{itemDecision.noSuitableMatch ? <NoMatchPill /> : <MatchConfidencePill confidence={itemDecision.matchConfidence} detailed />}</div></td>
-                      <td><strong>{numberFormatter.format(itemDecision.expectedSales)}</strong><small>selected product actual</small></td>
-                      <td><strong>{numberFormatter.format(itemDecision.quantity)}</strong><small>sales ÷ {Math.round(targetSellThrough * 100)}% ST</small></td>
+                      <td>
+                        <strong>{numberFormatter.format(itemDecision.expectedSales)}</strong>
+                        <small>
+                          {itemDecision.noSuitableMatch
+                            ? "not generated"
+                            : itemDecision.forecast
+                              ? `${numberFormatter.format(itemDecision.salesLow)}–${numberFormatter.format(itemDecision.salesHigh)}`
+                              : "selected product actual"}
+                        </small>
+                      </td>
+                      <td>
+                        <strong>{numberFormatter.format(itemDecision.quantity)}</strong>
+                        <small>
+                          {itemDecision.noSuitableMatch
+                            ? "planner review"
+                            : itemDecision.forecast
+                              ? `${Math.round(targetSellThrough * 100)}% expected ST`
+                              : `sales ÷ ${Math.round(targetSellThrough * 100)}% ST`}
+                        </small>
+                      </td>
                       <td><strong>{overrides[item.id] ? numberFormatter.format(overrides[item.id]) : "—"}</strong><small>{overrides[item.id] ? "Adjusted" : "Pending"}</small></td>
                       <td><button className="row-action" onClick={() => chooseItem(item.id)}>Review →</button></td>
                     </tr>

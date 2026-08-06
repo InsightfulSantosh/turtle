@@ -78,20 +78,27 @@ def test_generated_artifact_contract() -> None:
     model = data["meta"]["model"]
 
     assert model["version"] == "5.1.0"
-    assert model["evidencePolicy"] == "single_top_visual_analogue"
-    assert model["noMachineLearningForecast"] is True
+    assert model["evidencePolicy"] == "pooled_visual_analogue_forecast"
+    assert model["noMachineLearningForecast"] is False
     assert model["noAttributeMatching"] is True
     assert model["topK"] == 4
     assert model["targetSellThrough"] == 0.70
     assert model["minimumVisualScore"] == 0.5
-    assert "demandPipeline" not in model
     assert "regressionBlend" not in model
     assert "attributeWeight" not in model
-    assert "backtest" not in model
     assert len(data["historical"]) == 665
     assert len(data["upcoming"]) == expected_upcoming
 
+    # The fitted priors travel with the artifact so the frontend can repool the
+    # forecast when a planner moves a slider.
+    demand_model = model["demandModel"]
+    assert demand_model["horizonWeeks"] > 0
+    assert demand_model["shrinkageTau"] > 0
+    assert demand_model["groups"][""]["rows"] > 0
+
     history_by_id = {item["id"]: item for item in data["historical"]}
+    copied = 0
+    recommended = 0
     for item in data["upcoming"]:
         recommendation = item["recommendation"]
         assert len(item["matches"]) <= 4
@@ -100,10 +107,20 @@ def test_generated_artifact_contract() -> None:
         if recommendation["noSuitableMatch"]:
             assert recommendation["expectedSales"] == 0
             assert recommendation["quantity"] == 0
+            assert "demand" not in recommendation
             continue
+        recommended += 1
         historical = history_by_id[item["matches"][0]["historicalId"]]
         assert round(item["matches"][0]["visualScore"] * 100) >= round(model["minimumVisualScore"] * 100)
-        expected_sales = min(round(float(historical["salesTarget"]) / 25) * 25, 2_000)
-        expected_order = min(round(expected_sales / 0.70 / 25) * 25, 2_000)
-        assert recommendation["expectedSales"] == expected_sales
-        assert recommendation["quantity"] == expected_order
+        # The analogue's own cleaned sales stay reported, as evidence rather
+        # than as the forecast.
+        assert recommendation["analogueSales"] == min(round(float(historical["salesTarget"]) / 25) * 25, 2_000)
+        assert recommendation["demand"]["analoguesUsed"] >= 1
+        assert recommendation["salesLow"] < recommendation["salesHigh"]
+        assert recommendation["low"] < recommendation["high"]
+        copied += recommendation["expectedSales"] == recommendation["analogueSales"]
+
+    # The reported defect: the forecast was the analogue's sales under a second
+    # name for every product. Incidental agreement is fine; systematic is not.
+    assert recommended > 0
+    assert copied / recommended < 0.25
