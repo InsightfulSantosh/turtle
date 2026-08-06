@@ -117,8 +117,6 @@ class RealDataPipeline:
         historical_image_coverage, upcoming_image_coverage = self._attach_product_images(features)
         return {
             "meta": self._metadata(
-                len(ingested.historical_rows),
-                len(ingested.upcoming_rows),
                 features,
                 historical_report,
                 upcoming_report,
@@ -221,10 +219,6 @@ class RealDataPipeline:
                 "historicalImageCoverage": historical_coverage,
                 "upcomingImageCoverage": upcoming_coverage,
                 "missingUpcomingImages": [item["id"] for item in upcoming if not item.get("imageUrl")],
-                "imageMappingStatus": (
-                    f"Mapped {historical_coverage} historical and {upcoming_coverage} upcoming "
-                    f"{selected_type} product images by catalogue identifier."
-                ),
                 "artifactScope": {
                     "itemType": selected_type,
                     "historicalItems": len(historical),
@@ -339,11 +333,6 @@ class RealDataPipeline:
                 "missingUpcomingImages": [
                     item["id"] for item in selected if not item.get("imageUrl")
                 ],
-                "imageMappingStatus": (
-                    f"Preview mapped {sample_coverage} of {len(selected)} sampled upcoming "
-                    f"images; full SS27 catalogue coverage is {full_upcoming_coverage} "
-                    f"of {full_upcoming_count}."
-                ),
                 "previewSample": True,
                 "previewSampleSize": len(selected),
                 "previewSampleSeed": sample_seed,
@@ -379,8 +368,6 @@ class RealDataPipeline:
 
     def _metadata(
         self,
-        historical_row_count: int,
-        upcoming_row_count: int,
         features,
         historical_report: CleaningReport,
         upcoming_report: CleaningReport,
@@ -401,21 +388,11 @@ class RealDataPipeline:
             "sourceImageArchive": (
                 f"{self.settings.historical_image_root.name}, {self.settings.upcoming_image_root.name}"
             ),
-            "imageMappingStatus": (
-                f"Mapped {historical_image_coverage} historical and "
-                f"{upcoming_image_coverage} upcoming product images by "
-                "catalogue identifier."
-            ),
             "historicalItems": len(features.historical),
             "upcomingItems": len(features.upcoming),
             "historicalImageCoverage": historical_image_coverage,
             "upcomingImageCoverage": upcoming_image_coverage,
             "missingUpcomingImages": missing_upcoming_images,
-            "historicalSourceRange": (f"{self.settings.sheet_name}!A1:W{historical_row_count + 1}"),
-            "upcomingSourceRange": (f"{self.settings.sheet_name}!A1:K{upcoming_row_count + 1}"),
-            "attributeColumnMap": self._attribute_column_map(),
-            "excludedConstantAttributes": [],
-            "excludedNonComparisonFields": self._excluded_fields(),
             "preprocessing": {
                 "identifierFormat": "PREFIX-STYLE-COLOUR",
                 "columnSchema": "Canonical snake_case",
@@ -545,68 +522,3 @@ class RealDataPipeline:
             "calibrationMethod": "Not applicable without generated embeddings",
             "distances": [],
         }
-
-    @staticmethod
-    def _attribute_column_map() -> dict[str, dict[str, str]]:
-        return {
-            "item": {
-                "historicalColumn": "item_type",
-                "upcomingColumn": "item_type",
-            },
-            "design": {
-                "historicalColumn": "design",
-                "upcomingColumn": "design",
-            },
-            "category_type": {
-                "historicalColumn": "category_type",
-                "upcomingColumn": "category_type",
-            },
-            "fabric": {
-                "historicalColumn": "fabric",
-                "upcomingColumn": "fabric",
-            },
-            "colour": {
-                "historicalColumn": "colour",
-                "upcomingColumn": "colour",
-            },
-        }
-
-    @staticmethod
-    def _excluded_fields() -> list[dict[str, str]]:
-        return [
-            {
-                "label": "Identifiers",
-                "historicalColumn": "product_id, style_code",
-                "upcomingColumn": "product_id, style_code",
-                "reason": ("Identifiers locate products but do not describe reusable product similarity."),
-            },
-            {
-                "label": "Colour variant code",
-                "historicalColumn": "colour_code",
-                "upcomingColumn": "colour_code",
-                "reason": ("Variant codes are identifiers; colour names are used for similarity."),
-            },
-            {
-                "label": "Season",
-                "historicalColumn": "season",
-                "upcomingColumn": "season",
-                "reason": (
-                    "Season supports tracing and temporal validation but is "
-                    "outside the five approved product attributes."
-                ),
-            },
-            {
-                "label": "Demand outcomes",
-                "historicalColumn": ("total_order_quantity, dispatch_quantity, sales_quantity, sell_through"),
-                "upcomingColumn": "—",
-                "reason": ("Historical outcomes train and validate demand; they cannot be product-similarity inputs."),
-            },
-            {
-                "label": "Commercial operations",
-                "historicalColumn": (
-                    "max_quantity, pt_quantity, ril_quantity, first_dispatch_date, ageing_days, weekly_sell_through"
-                ),
-                "upcomingColumn": "collection_world",
-                "reason": ("These fields have no like-for-like counterpart in the other workbook."),
-            },
-        ]

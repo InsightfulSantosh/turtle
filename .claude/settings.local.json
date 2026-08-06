@@ -29,7 +29,19 @@
       "Bash(ps -p 16563 -o pid,command)",
       "Bash(find . -iname \"*.json\" -newer Makefile -not -path \"*/node_modules/*\" -not -path \"*/.git/*\" 2>/dev/null | head -20; echo \"---\"; ls -la frontend/public/product-images 2>/dev/null | head; echo \"---cache---\"; du -sh ~/.cache/huggingface 2>/dev/null; find ~/.cache/huggingface -maxdepth 2 -iname \"*fashion*\" -o -iname \"*dino*\" -o -iname \"*siglip*\" 2>/dev/null | head -20)",
       "Bash(ls .venv/bin/python 2>/dev/null && echo OK || echo \"no venv\"; ls DATA 2>/dev/null | head -5)",
-      "Bash(PYTHONPATH=backend/src .venv/bin/python -m data_pipeline.prepare_real_data --with-vision --verbose --sample-size 200 --sample-seed 27 --output tmp/generated-data-visual-sample-200-top4-rebuild.json --log-file tmp/data-vision-sample-200-top4-rebuild.log)"
+      "Bash(PYTHONPATH=backend/src .venv/bin/python -m data_pipeline.prepare_real_data --with-vision --verbose --sample-size 200 --sample-seed 27 --output tmp/generated-data-visual-sample-200-top4-rebuild.json --log-file tmp/data-vision-sample-200-top4-rebuild.log)",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('/Users/santoshkumar/Data_science/CB_github/turtle/backend/src/data_pipeline/refresh_recommendations.py'\\).read\\(\\)\\)\")",
+      "Bash(sed -n '1,2227p' frontend/app/globals.css)",
+      "Bash(sed -n '2692,$p' frontend/app/globals.css)",
+      "Bash(cp /tmp/globals_new.css /Users/santoshkumar/Data_science/CB_github/turtle/frontend/app/globals.css *)",
+      "Bash(python3 -c \"import ast; ast.parse\\(open\\('backend/src/machine_learning/model.py'\\).read\\(\\)\\); ast.parse\\(open\\('backend/src/data_pipeline/pipeline.py'\\).read\\(\\)\\); ast.parse\\(open\\('backend/src/data_pipeline/refresh_recommendations.py'\\).read\\(\\)\\); ast.parse\\(open\\('backend/tests/test_model.py'\\).read\\(\\)\\)\")",
+      "Bash(PYTHONPATH=backend/src .venv/bin/python -m pytest backend/tests/test_model.py -q)",
+      "Bash(PYTHONPATH=backend/src .venv/bin/python -m pytest backend/tests -q)",
+      "Bash(.venv/bin/ruff check *)",
+      "Bash(git stash *)",
+      "Bash(npm --prefix frontend run test)",
+      "Bash(node -e ' *)",
+      "Bash(curl -s \"http://localhost:3000/_next/static/chunks/app_globals_0jn8.0u.css?x=$\\(date +%s\\)\" -H \"Cache-Control: no-cache\")"
     ]
   }
 }

@@ -88,7 +88,6 @@ def test_generated_artifact_contract() -> None:
     assert "regressionBlend" not in model
     assert "attributeWeight" not in model
     assert "backtest" not in model
-    assert data["meta"]["attributeAudit"]["activeCount"] == 0
     assert len(data["historical"]) == 665
     assert len(data["upcoming"]) == expected_upcoming
 

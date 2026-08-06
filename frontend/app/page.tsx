@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import dataJson from "./generated-data.json";
 
 type Confidence = "High" | "Medium" | "Low";
-type Tab = "compare" | "portfolio" | "method";
+type Tab = "compare" | "portfolio";
 
 type HistoricalItem = {
   id: string;
@@ -78,7 +78,6 @@ type Dataset = {
     generatedAt: string;
     dataMode: "sample" | "real";
     upcomingSeason: string;
-    imageMappingStatus: string;
     historicalItems: number;
     upcomingItems: number;
     historicalImageCoverage: number;
@@ -87,34 +86,6 @@ type Dataset = {
     confidenceCounts: Record<Confidence, number>;
     matchConfidenceCounts: Record<Confidence, number>;
     visualMethod: string;
-    attributeAudit: {
-      historicalSourceRange: string;
-      upcomingSourceRange: string;
-      activeCount: number;
-      policy: string;
-      activeAttributes: Array<{
-        key: string;
-        label: string;
-        historicalColumn: string;
-        upcomingColumn: string;
-        weight: number;
-        historicalUnique: number;
-        upcomingUnique: number;
-        method: string;
-      }>;
-      excludedConstants: Array<{
-        label: string;
-        historicalColumn: string;
-        upcomingColumn: string;
-        reason: string;
-      }>;
-      excludedNonComparisonFields: Array<{
-        label: string;
-        historicalColumn: string;
-        upcomingColumn: string;
-        reason: string;
-      }>;
-    };
     visionModel: {
       modelId: string;
       modelRevision: string | null;
@@ -191,15 +162,6 @@ type Dataset = {
       minimumMatchConfidence: Confidence;
       noMatchPolicy: string;
       topK: number;
-    };
-    dataQuality: {
-      duplicateHistoricalRowsRemoved: number;
-      upcomingWithoutHistoricalItem: number;
-      zeroSalesHistoricalRowsExcluded: number;
-      upcomingRowsExcludedUnseenItem: number;
-      dispatchAboveOrder: number;
-      salesAboveDispatch: number;
-      sellThroughAbove100: number;
     };
   };
   historical: HistoricalItem[];
@@ -469,6 +431,7 @@ function App() {
     dataset.meta.model.targetSellThrough ?? 0.70,
   );
   const [overrides, setOverrides] = useState<Record<string, number>>({});
+  const [approvedIds, setApprovedIds] = useState<Record<string, boolean>>({});
   const [toast, setToast] = useState("");
 
   const selected = visibleUpcoming.find((item) => item.id === selectedId) ?? initialItem;
@@ -521,6 +484,7 @@ function App() {
   const focusedMatch = decision.selectedMatch;
   const focusedHistory = focusedMatch ? historyById.get(focusedMatch.historicalId) : undefined;
   const finalQuantity = overrides[selected.id] ?? decision.quantity;
+  const isApproved = Boolean(approvedIds[selected.id]);
 
   const totalOrder = portfolio.reduce(
     (sum, { item, decision: itemDecision }) => sum + (overrides[item.id] ?? itemDecision.quantity),
@@ -534,6 +498,15 @@ function App() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
+  function unapproveItem(id: string) {
+    setApprovedIds((current) => {
+      if (!(id in current)) return current;
+      const next = { ...current };
+      delete next[id];
+      return next;
+    });
+  }
+
   function chooseAnalogue(historicalId: string) {
     setFocusedHistoricalId(historicalId);
     setOverrides((current) => {
@@ -541,21 +514,25 @@ function App() {
       delete next[selected.id];
       return next;
     });
+    unapproveItem(selected.id);
   }
 
   function changeMinimumSimilarity(value: number) {
     setMinimumSimilarity(value);
     setOverrides({});
+    setApprovedIds({});
   }
 
   function changeTargetSellThrough(value: number) {
     setTargetSellThrough(value);
     setOverrides({});
+    setApprovedIds({});
   }
 
   function applyOverride(value: number) {
     if (!Number.isFinite(value) || value < 0) return;
     setOverrides((current) => ({ ...current, [selected.id]: Math.round(value) }));
+    unapproveItem(selected.id);
     setToast(`Planner quantity saved for ${selected.id}`);
   }
 
@@ -565,10 +542,19 @@ function App() {
       delete next[selected.id];
       return next;
     });
+    unapproveItem(selected.id);
     setToast("System recommendation restored");
   }
 
+  function approveOrder() {
+    setApprovedIds((current) => ({ ...current, [selected.id]: true }));
+    setToast(`${selected.id} approved at ${numberFormatter.format(finalQuantity)} units`);
+  }
+
   function exportCsv() {
+    const scoreValue = (value: number | null | undefined) =>
+      value === null || value === undefined ? "" : Math.round(value * 100);
+
     const rows = [
       [
         "Upcoming item",
@@ -576,15 +562,18 @@ function App() {
         "Design",
         "Colour",
         "Category Type",
-        "Fabric",
         "Product match status",
         "Top historical match",
-        "Visual AI similarity",
+        "Visual AI similarity (overall)",
+        "Colour similarity",
+        "Pattern similarity",
+        "Style similarity",
+        "Texture similarity",
         "Match confidence",
         "Matched product sales",
-        "Matched product original order",
+        "AI recommended quantity",
         "Planner quantity",
-        "Recommendation version",
+        "Approval status",
       ],
       ...portfolio.map(({ item, decision: itemDecision }) => {
         const top = itemDecision.noSuitableMatch
@@ -596,15 +585,18 @@ function App() {
           item.design,
           item.colour,
           item.categoryType,
-          item.fabric,
           itemDecision.noSuitableMatch ? "No product match" : "Matched",
           top?.historicalId ?? "",
-          top?.visualScore === null ? "" : Math.round((top?.visualScore ?? 0) * 100),
+          scoreValue(top?.visualScore),
+          scoreValue(top?.colourVisualScore),
+          scoreValue(top?.dinoVisualScore),
+          scoreValue(top?.fashionVisualScore),
+          scoreValue(top?.textureVisualScore),
           itemDecision.matchConfidence,
           itemDecision.expectedSales,
           itemDecision.quantity,
           overrides[item.id] ?? "",
-          dataset.meta.model.version,
+          approvedIds[item.id] ? "Approved" : "Pending",
         ];
       }),
     ];
@@ -634,7 +626,6 @@ function App() {
           {([
             ["compare", "Compare"],
             ["portfolio", "Portfolio"],
-            ["method", "Methodology"],
           ] as [Tab, string][]).map(([key, label]) => (
             <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>
               {label}
@@ -643,7 +634,6 @@ function App() {
         </nav>
         <div className="top-actions">
           <span className="sync-state"><i /> Recommendations up to date</span>
-          <button className="button secondary" onClick={exportCsv}>Export CSV</button>
           <span className="avatar" aria-label="Planner profile">SD</span>
         </div>
       </header>
@@ -659,13 +649,27 @@ function App() {
               <span className="season-chip">{dataset.meta.upcomingSeason}</span>
             </div>
             <label className="search-box">
-              <span>⌕</span>
+              <span aria-hidden="true">⌕</span>
               <input
                 value={queueSearch}
                 onChange={(event) => setQueueSearch(event.target.value)}
-                placeholder="Search style, colour, fabric"
-                aria-label="Search upcoming styles"
+                placeholder="Search style, design, colour, category or fabric"
+                aria-label="Search upcoming styles by style code, design, colour, category type or fabric"
+                title="Searches style code, design, colour, category type and fabric"
+                type="search"
+                autoComplete="off"
+                spellCheck={false}
               />
+              {queueSearch && (
+                <button
+                  type="button"
+                  className="search-clear"
+                  onClick={() => setQueueSearch("")}
+                  aria-label="Clear search"
+                >
+                  ×
+                </button>
+              )}
             </label>
             <div className="queue-filters">
               <select value={segment} onChange={(event) => setSegment(event.target.value)} aria-label="Filter category">
@@ -724,11 +728,22 @@ function App() {
                 <h1>{selected.id}</h1>
               </div>
               <div className="workspace-stepper" aria-label="Decision progress">
-                <span className="done">1 <small>Matched</small></span>
+                <span
+                  className={decision.noSuitableMatch ? "blocked" : "done"}
+                  title={decision.noSuitableMatch
+                    ? "No visual analogue cleared the similarity threshold"
+                    : "A historical analogue was matched"}
+                >
+                  1 <small>{decision.noSuitableMatch ? "No match" : "Matched"}</small>
+                </span>
                 <i />
-                <span className="current">2 <small>Review</small></span>
+                <span className={isApproved ? "done" : "current"} aria-current={isApproved ? undefined : "step"}>
+                  2 <small>Review</small>
+                </span>
                 <i />
-                <span>3 <small>Approve</small></span>
+                <span className={isApproved ? "current" : ""} aria-current={isApproved ? "step" : undefined}>
+                  3 <small>{isApproved ? "Approved" : "Approve"}</small>
+                </span>
               </div>
             </div>
 
@@ -815,8 +830,11 @@ function App() {
                     </label>
                     <div className="override-actions">
                       {overrides[selected.id] && <button className="text-button" onClick={resetOverride}>Reset</button>}
-                      <button className="button primary" onClick={() => setToast(`${selected.id} approved at ${numberFormatter.format(finalQuantity)} units`)}>
-                        Approve order
+                      <button
+                        className={`button primary ${isApproved ? "approved" : ""}`}
+                        onClick={approveOrder}
+                      >
+                        {isApproved ? "✓ Approved" : "Approve order"}
                       </button>
                     </div>
                   </div>
@@ -1034,7 +1052,29 @@ function App() {
             <article className="accent"><span>Recommended order</span><strong>{numberFormatter.format(totalOrder)}</strong><small>units across {dataset.meta.upcomingSeason}</small></article>
           </div>
           <div className="portfolio-toolbar">
-            <label className="search-box wide"><span>⌕</span><input value={queueSearch} onChange={(event) => setQueueSearch(event.target.value)} placeholder="Search item, design, colour, category type or fabric" /></label>
+            <label className="search-box wide">
+              <span aria-hidden="true">⌕</span>
+              <input
+                value={queueSearch}
+                onChange={(event) => setQueueSearch(event.target.value)}
+                placeholder="Search style code, design, colour, category or fabric"
+                aria-label="Search portfolio by style code, design, colour, category type or fabric"
+                title="Searches style code, design, colour, category type and fabric"
+                type="search"
+                autoComplete="off"
+                spellCheck={false}
+              />
+              {queueSearch && (
+                <button
+                  type="button"
+                  className="search-clear"
+                  onClick={() => setQueueSearch("")}
+                  aria-label="Clear search"
+                >
+                  ×
+                </button>
+              )}
+            </label>
             <select value={segment} onChange={(event) => setSegment(event.target.value)} aria-label="Filter portfolio category">
               <option>All</option>
               {productSegments.map((itemType) => <option key={itemType}>{itemType}</option>)}
@@ -1046,6 +1086,11 @@ function App() {
             <table className="portfolio-table">
               <thead><tr><th>Upcoming style</th><th>Product attributes</th><th>Top historical analogue</th><th>Match score</th><th>Decision signals</th><th>Expected sales</th><th>Recommended order</th><th>Planner order</th><th><span className="sr-only">Actions</span></th></tr></thead>
               <tbody>
+                {queueItems.length === 0 && (
+                  <tr className="table-empty-row">
+                    <td colSpan={9}>No styles match these filters.</td>
+                  </tr>
+                )}
                 {queueItems.map(({ item, decision: itemDecision }) => {
                   const top = itemDecision.noSuitableMatch
                     ? undefined
@@ -1064,7 +1109,7 @@ function App() {
                       </td>
                       <td>
                         {top ? (
-                          <><strong className="match-score">{scorePercent(top.combinedScore)}</strong><small>100% visual</small></>
+                          <strong className="match-score">{scorePercent(top.combinedScore)}</strong>
                         ) : (
                           <><strong className="no-match-table-label">Below threshold</strong><small>Candidate suppressed</small></>
                         )}
@@ -1080,144 +1125,6 @@ function App() {
               </tbody>
             </table>
           </div>
-        </section>
-      )}
-
-      {tab === "method" && (
-        <section className="method-page page-wrap">
-          <div className="page-heading method-heading">
-            <div><span className="eyebrow">Visual evidence only</span><h1>How model v{dataset.meta.model.version} reaches a recommendation</h1><p>The top four visual analogues are shown for review; exactly one selected product supplies sales evidence for the order quantity.</p></div>
-            <div className="poc-badge"><span>AI v{dataset.meta.model.version}</span><small>Real data · {dataset.meta.upcomingSeason}</small></div>
-          </div>
-          <div className="workflow-grid">
-            {[
-              ["01", "Audit inputs", "Map both workbook schemas, remove constant or non-comparable fields, link images, and quarantine inconsistent outcome values."],
-              ["02", "Retrieve visual analogues", dataset.meta.visionModel.reranker
-                ? `FashionSigLIP retrieves the top ${dataset.meta.visionModel.reranker.candidateCount} same-item-type candidates with ${dataset.meta.visionModel.reranker.candidateIndex?.engine ?? "exact vector search"}; dominant garment palettes use perceptual CIEDE2000 distance to reject visible colour mismatches, multi-scale DINO verifies pattern detail, and the remaining candidates are ranked using 100% visual evidence. Every OTTR visual stage uses a fixed waist-to-lower-leg trouser crop that excludes footwear, with hard pattern rejection limited to checks, prints, stripes and dobby/structure.`
-                : `Create ${dataset.meta.attributeAudit.activeCount}-field structured evidence and compare mapped product images.`],
-              ["03", "Select one product", `Review the top four and use only the clicked analogue when it clears the tunable visual threshold.`],
-              ["04", "Use its observed outcome", "Copy cleaned sales and original order from that single historical product. If there is no accepted match, return zero and require manual review."],
-            ].map(([number, title, copy]) => <article key={number}><span>{number}</span><h3>{title}</h3><p>{copy}</p></article>)}
-          </div>
-          <section className="attribute-audit-card">
-            <div className="attribute-audit-heading">
-              <div>
-                <span className="card-label">Workbook attribute audit</span>
-              <h2>Workbook fields are not matched</h2>
-                <p>{dataset.meta.attributeAudit.policy}</p>
-              </div>
-              <span className="audit-range">Historical {dataset.meta.attributeAudit.historicalSourceRange}<br />Upcoming {dataset.meta.attributeAudit.upcomingSourceRange}</span>
-            </div>
-            <div className="active-attribute-grid">
-              {dataset.meta.attributeAudit.activeAttributes.map((attribute) => (
-                <article key={attribute.key}>
-                  <div><b>{attribute.label}</b><strong>Audit only</strong></div>
-                  <p>{attribute.historicalColumn} ↔ {attribute.upcomingColumn}</p>
-                  <small>{attribute.method}</small>
-                  <span>{attribute.historicalUnique} historical · {attribute.upcomingUnique} upcoming values</span>
-                </article>
-              ))}
-            </div>
-            <div className="excluded-attribute-row">
-              {dataset.meta.attributeAudit.excludedConstants.map((attribute) => (
-                <article key={attribute.label}>
-                  <span>Excluded field</span>
-                  <b>{attribute.label}</b>
-                  <small>{attribute.historicalColumn} ↔ {attribute.upcomingColumn}</small>
-                  <p>{attribute.reason}</p>
-                </article>
-              ))}
-            </div>
-            <details className="excluded-field-details">
-              <summary>Why the other workbook columns are not similarity attributes</summary>
-              <div>
-                {dataset.meta.attributeAudit.excludedNonComparisonFields.map((field) => (
-                  <article key={field.label}>
-                    <b>{field.label}</b>
-                    <small>{field.historicalColumn} ↔ {field.upcomingColumn}</small>
-                    <p>{field.reason}</p>
-                  </article>
-                ))}
-              </div>
-            </details>
-          </section>
-          <div className="method-columns">
-            <article className="formula-card">
-              <span className="card-label">Decision formula</span>
-              <h2>Single-analogue policy</h2>
-              <div className="formula">
-                <p>Match score</p>
-                <strong>
-                  {visualMatchingAvailable ? "100% Visual AI" : "No recommendation until an image is available"}
-                </strong>
-              </div>
-              <div className="formula">
-                <p>Match confidence</p>
-                <strong>Single top visual score + image availability + historical outcome quality</strong>
-              </div>
-              <div className="formula">
-                <p>Sales evidence</p>
-                <strong>Cleaned observed sales from the single accepted historical visual analogue</strong>
-              </div>
-              <div className="formula">
-                <p>Order evidence</p>
-                <strong>Selected analogue sales ÷ target sell-through, rounded to a 25-unit pack</strong>
-              </div>
-              <div className="formula">
-                <p>No-match behavior</p>
-                <strong>Zero system quantity and mandatory planner review</strong>
-              </div>
-            </article>
-            <article className="readiness-card">
-              <span className="card-label">Policy validation</span>
-              <h2>What is enforced</h2>
-              <ul>
-                <li><b>Top three visual analogues</b> are reviewable, but only one contributes</li>
-                <li><b>No attribute score</b> is calculated or blended</li>
-                <li><b>No regression model</b> predicts sales or order quantity</li>
-                <li><b>{dataset.meta.dataQuality.dispatchAboveOrder + dataset.meta.dataQuality.salesAboveDispatch}</b> order/dispatch/sales anomalies contained by guardrails</li>
-              </ul>
-              <div className="warning-note">A visual match transfers historical evidence; it is not a statistical demand forecast. Planner approval remains required.</div>
-            </article>
-          </div>
-          <div className="upgrade-table">
-            <div><span>Layer</span><b>Real-data pilot now</b><b>Future production roadmap</b></div>
-            <div><span>Visual representation</span><p>{dataset.meta.imageMappingStatus}</p><p>Client-tuned visual image/text embedding service; domain tuning awaits reviewed pairs</p></div>
-            <div><span>Retrieval</span><p>Same-item-type visual search; top four products retained for selection</p><p>Metadata-filtered vector search followed by reviewed visual re-ranking</p></div>
-            <div><span>Quantity logic</span><p>Selected product sales divided by tunable target sell-through</p><p>Optional demand forecasting can be reconsidered only with client approval</p></div>
-            <div><span>Decision signals</span><p>Visual match confidence only</p><p>Planner feedback and reviewed match labels</p></div>
-            <div><span>Uncertainty</span><p>No statistical range is claimed</p><p>Future ranges require a separately approved forecasting model</p></div>
-            <div><span>Workflow</span><p>Browser-session planner override</p><p>Planned durable jobs, feedback capture, model registry and recommendation audit</p></div>
-            <div><span>Data</span><p>{dataset.meta.historicalItems} historical / {dataset.meta.upcomingItems} upcoming real records</p><p>3–5 seasons plus inventory and markdown context</p></div>
-          </div>
-          <section className="scale-platform">
-            <div className="scale-platform-heading">
-              <div>
-                <span className="eyebrow">Future production path / 200K–500K items</span>
-                <h2>The database-backed scale platform is intentionally deferred</h2>
-                <p>This roadmap can be implemented after the current data and model workflow is validated and the required client history is available.</p>
-              </div>
-              <span className="scale-badge">Future roadmap</span>
-            </div>
-            <div className="scale-readiness-grid">
-              {[
-                ["Future phase", "Vector catalogue", "Managed vector storage, hard metadata filters and nearest-neighbour retrieval."],
-                ["Future phase", "Visual embedding service", "Separately deployable deep image/text inference with domain allowlisting, size limits and private-network blocking."],
-                ["Needs client labels", "Learning-to-rank", "Gradient-boosted ranking uses planner relevance feedback, outcome reliability and product evidence."],
-                ["Needs 3–5 seasons", "Demand forecasting", "Temporal P10/P50/P90 quantile forecasting uses clean stock-out, markdown, channel and hierarchy features."],
-                ["Needs calibration", "Hierarchy + risk", "Hierarchical reconciliation keeps category, channel and region totals coherent before order constraints."],
-                ["Future phase", "Operations", "MOQ, pack, budget and capacity optimisation plus durable ingestion, batch, feedback and audit records."],
-              ].map(([state, title, copy]) => (
-                <article key={title} className={state === "Available now" ? "ready" : "waiting"}>
-                  <span>{state}</span><h3>{title}</h3><p>{copy}</p>
-                </article>
-              ))}
-            </div>
-            <div className="activation-gate">
-              <b>Future production activation gate</b>
-              <span>A future service should refuse startup until approved ranker and demand-model artifacts are available, preventing a baseline fallback from being presented as trained production AI.</span>
-            </div>
-          </section>
         </section>
       )}
 

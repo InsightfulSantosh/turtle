@@ -37,7 +37,6 @@ test("keeps the visual-only single-analogue contract intact", async () => {
     reranker.appearance.itemTypeOverrides.OTTR.relativeBox,
     [0.16, 0.28, 0.84, 0.8],
   );
-  assert.equal(artifact.meta.attributeAudit.activeCount, 0);
   assert.equal(artifact.upcoming.length, expectedUpcoming);
   assert.equal(artifact.meta.historicalImageCoverage, 508);
   assert.equal(artifact.meta.upcomingImageCoverage, expectedUpcoming);

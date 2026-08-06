@@ -70,22 +70,9 @@ def refresh_recommendations(path: Path) -> dict[str, Any]:
     artifact["meta"]["matchConfidenceCounts"] = confidence_counts
     artifact["meta"].pop("demandUncertaintyCounts", None)
     artifact["meta"].pop("attributeScoreRange", None)
-    audit = artifact["meta"].get("attributeAudit", {})
-    audit["activeCount"] = 0
-    audit["activeAttributes"] = []
-    audit["policy"] = (
-        "Workbook attributes are retained only for source-data audit and display; "
-        "they are not compared, scored or used for forecasting."
-    )
+    artifact["meta"].pop("attributeAudit", None)
     for historical in artifact["historical"]:
         historical.pop("normalizedDemand", None)
-    for section in (artifact["meta"], audit):
-        for field in section.get("excludedNonComparisonFields", []):
-            if field.get("label") == "Demand outcomes":
-                field["reason"] = (
-                    "Historical order and sales are retained only as the selected "
-                    "analogue's output evidence; they never influence visual matching."
-                )
     for item in artifact["upcoming"]:
         for match in item["matches"]:
             match.pop("attributeScore", None)

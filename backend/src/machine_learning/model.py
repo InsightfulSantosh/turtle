@@ -14,76 +14,6 @@ MAX_BUY = 2_000
 MIN_CONVINCING_VISUAL_SCORE = 0.50
 DEFAULT_TARGET_SELL_THROUGH = 0.70
 
-EXCLUDED_CONSTANT_ATTRIBUTES: tuple[dict[str, str], ...] = ()
-
-EXCLUDED_NON_COMPARISON_FIELDS = (
-    {
-        "label": "Identifiers",
-        "historicalColumn": "product_id, style_code",
-        "upcomingColumn": "product_id, style_code",
-        "reason": "Row and style identifiers identify products; they are not reusable product characteristics.",
-    },
-    {
-        "label": "Colour variant code",
-        "historicalColumn": "colour_code",
-        "upcomingColumn": "colour_code",
-        "reason": "Variant codes such as 1001 are not stable colour meanings; colour names are compared instead.",
-    },
-    {
-        "label": "Season",
-        "historicalColumn": "season",
-        "upcomingColumn": "season",
-        "reason": (
-            "Season supports tracing and temporal validation but is outside the five approved product attributes."
-        ),
-    },
-    {
-        "label": "Demand outcomes",
-        "historicalColumn": ("total_order_quantity, dispatch_quantity, sales_quantity, sell_through"),
-        "upcomingColumn": "—",
-        "reason": (
-            "Historical order and sales are retained only as the selected analogue's "
-            "output evidence; they never influence visual matching."
-        ),
-    },
-)
-
-
-def attribute_audit(
-    history: list[dict[str, Any]],
-    upcoming: list[dict[str, Any]],
-    source_meta: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Record workbook fields for traceability without scoring them."""
-
-    source_meta = source_meta or {}
-    excluded_constants = source_meta.get(
-        "excludedConstantAttributes",
-        list(EXCLUDED_CONSTANT_ATTRIBUTES),
-    )
-    excluded_non_comparison = source_meta.get(
-        "excludedNonComparisonFields",
-        list(EXCLUDED_NON_COMPARISON_FIELDS),
-    )
-    return {
-        "historicalSourceRange": source_meta.get(
-            "historicalSourceRange",
-            f"Sheet1!A1:T{len(history) + 1}",
-        ),
-        "upcomingSourceRange": source_meta.get(
-            "upcomingSourceRange",
-            f"Sheet1!A1:N{len(upcoming) + 1}",
-        ),
-        "activeCount": 0,
-        "activeAttributes": [],
-        "excludedConstants": list(excluded_constants),
-        "excludedNonComparisonFields": list(excluded_non_comparison),
-        "policy": (
-            "Workbook attributes are retained only for source-data audit and display; "
-            "they are not compared, scored or used for forecasting."
-        ),
-    }
-
 
 def clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(maximum, value))
@@ -528,13 +458,6 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
     meta = dict(source.get("meta", {}))
     source_quality = dict(meta.get("dataQuality", {}))
     source_quality.update(anomaly_counts)
-    audit = attribute_audit(history, upcoming, source_meta=meta)
-    audit["activeCount"] = 0
-    audit["activeAttributes"] = []
-    audit["policy"] = (
-        "Workbook attributes are retained only for source-data audit and display; "
-        "they are not compared, scored or used for forecasting."
-    )
     meta.update(
         {
             "title": "Turtle Season Intelligence AI",
@@ -550,7 +473,6 @@ def build_model_artifact(source: dict[str, Any], vision_output: dict[str, Any]) 
                 else [0, 0]
             ),
             "visualMethod": vision_output.get("engine", "FashionCLIP image embedding"),
-            "attributeAudit": audit,
             "visionModel": {
                 "modelId": vision_output.get("modelId", "unknown"),
                 "modelRevision": vision_output.get("modelRevision"),
