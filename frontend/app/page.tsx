@@ -216,18 +216,59 @@ function ceilingFor(item: ComparableProduct): number {
 }
 
 /**
- * The single number shown to a planner as "Sales prediction" everywhere on
- * screen. For a predictive forecast this is the median (the typical, most
- * likely outcome) rather than the mean — showing both side by side, as an
- * earlier version of this card did, reads as two conflicting answers to the
- * same question. The mean stays available as `expectedSales` for anyone
- * doing portfolio-level arithmetic (it's the statistically correct number to
- * sum across many products; the median is not), but a single product's card
- * only needs one number, and the one a human means by "how many will sell"
- * is the typical case, not an average pulled up by tail risk.
+ * Predicted demand for a product, independent of what is bought. For a
+ * predictive forecast this is the median (the typical, most likely outcome)
+ * rather than the mean — showing both side by side, as an earlier version of
+ * this card did — and an earlier version of the CSV alongside it — reads as
+ * two conflicting answers to the same question. The mean stays on the
+ * `Decision` as `expectedSales` (it's the statistically correct number to sum
+ * across many products; the median is not), but neither the card nor the
+ * export shows both: one product needs one number, and the one a human means
+ * by "how many will sell" is the typical case, not an average pulled up by
+ * tail risk.
+ *
+ * This is *demand*. Anything labelled as sales must go through
+ * `salesFromOrder` instead.
  */
 function headlineDemand(decision: Decision): number {
   return decision.forecast?.medianDemand ?? decision.expectedSales;
+}
+
+/**
+ * What the planner actually sells from a given buy. Sales are min(demand,
+ * order) — you cannot sell stock you did not buy — so a raise of the
+ * sell-through target, which shrinks the order, must pull the sales figure
+ * down with it. Reporting unclipped demand here let the card state impossible
+ * outcomes: a 300-unit buy beside a 575-unit "sales forecast", a 192%
+ * sell-through.
+ *
+ * Because min(·, order) is monotone, every quantile passes straight through
+ * it, so clipping the median and both interval bounds at the order quantity is
+ * exact rather than an approximation.
+ *
+ * Only the predictive path is clipped. On the legacy path these numbers are
+ * the matched analogue's own observed sales — a historical fact about a
+ * different product, which this buy has no business bounding.
+ */
+function salesFromOrder(decision: Decision, orderQuantity: number) {
+  const demand = headlineDemand(decision);
+  if (!decision.forecast) {
+    return {
+      headline: demand,
+      low: decision.salesLow,
+      high: decision.salesHigh,
+      demandExceedsOrder: false,
+    };
+  }
+  const clip = (value: number) => Math.min(value, orderQuantity);
+  return {
+    headline: clip(demand),
+    low: clip(decision.salesLow),
+    high: clip(decision.salesHigh),
+    // Clipping alone would silently hide an undersized buy, so the card flags
+    // when the order — not demand — is what limits sales.
+    demandExceedsOrder: demand > orderQuantity,
+  };
 }
 
 const P10_Z = 1.2815515655446004;
@@ -644,6 +685,7 @@ function App() {
   const focusedMatch = decision.selectedMatch;
   const focusedHistory = focusedMatch ? historyById.get(focusedMatch.historicalId) : undefined;
   const finalQuantity = overrides[selected.id] ?? decision.quantity;
+  const sales = salesFromOrder(decision, finalQuantity);
   const isApproved = Boolean(approvedIds[selected.id]);
 
   const totalOrder = portfolio.reduce(
@@ -715,42 +757,48 @@ function App() {
     const scoreValue = (value: number | null | undefined) =>
       value === null || value === undefined ? "" : Math.round(value * 100);
 
+    // One column per question a planner actually asks of this file. The four
+    // similarity sub-scores stay because they explain why the past product was
+    // selected. Competing demand statistics — the mean alongside the median
+    // and the p10/p90 band — stay out because they make one forecast look like
+    // several contradictory answers. The range remains available on the card,
+    // where the evidence context explains it.
     const rows = [
       [
-        "Upcoming item",
-        "Item",
+        "Product ID",
+        "Product type",
         "Design",
         "Colour",
-        "Category Type",
-        "Product match status",
-        "Top historical match",
-        "Visual AI similarity (overall)",
-        "Colour similarity",
-        "Pattern similarity",
-        "Style similarity",
-        "Texture similarity",
+        "Category",
+        "Match status",
+        "Similar past product",
+        "Overall similarity (%)",
+        "Colour similarity (%)",
+        "Pattern similarity (%)",
+        "Style similarity (%)",
+        "Texture similarity (%)",
         "Match confidence",
-        "Forecast demand (typical)",
-        "Forecast demand (average)",
-        "Forecast low (p10)",
-        "Forecast high (p90)",
-        "Analogue actual sales",
-        "Analogue original order",
-        "AI recommended quantity",
+        "Expected sales (units)",
+        "Past product sales (units)",
+        "Past product order (units)",
+        "Recommended order (units)",
         // Audit trail rather than an on-card warning: a capped order is a
-        // policy limit, not a target the model actually reached, and a capped
-        // range tail understates upside. Neither belongs in the planner's
-        // face, but both belong in offline analysis.
-        "Buy ceiling",
-        "Order hit ceiling",
-        "Range tail hit ceiling",
-        "Planner quantity",
+        // policy limit, not a target the model actually reached. That does not
+        // belong in the planner's face, but it does belong in offline analysis.
+        "Maximum order (units)",
+        "Order limit applied",
+        // Always the number to order — the planner's figure when they set one,
+        // the model's otherwise. An override-only column left most rows blank
+        // and made every reader recompute the fallback by hand.
+        "Final order (units)",
         "Approval status",
       ],
       ...portfolio.map(({ item, decision: itemDecision }) => {
         const top = itemDecision.noSuitableMatch
           ? undefined
           : itemDecision.ranked[0];
+        const finalOrder = overrides[item.id] ?? itemDecision.quantity;
+        const expectedSales = salesFromOrder(itemDecision, finalOrder).headline;
         return [
           item.id,
           item.itemType,
@@ -765,17 +813,13 @@ function App() {
           scoreValue(top?.fashionVisualScore),
           scoreValue(top?.textureVisualScore),
           itemDecision.matchConfidence,
-          headlineDemand(itemDecision),
-          itemDecision.expectedSales,
-          itemDecision.salesLow,
-          itemDecision.salesHigh,
+          expectedSales,
           itemDecision.analogueSales,
           itemDecision.analogueQuantity,
           itemDecision.quantity,
           itemDecision.buyCeiling,
           itemDecision.quantityCapped ? "Yes" : "No",
-          itemDecision.highCapped ? "Yes" : "No",
-          overrides[item.id] ?? "",
+          finalOrder,
           approvedIds[item.id] ? "Approved" : "Pending",
         ];
       }),
@@ -939,13 +983,14 @@ function App() {
 
               <article className="recommendation-card">
                 <div className="recommendation-topline">
-                  <div>
-                    <span className="card-label">AI order quantity recommendation</span>
-                  </div>
-                  <div className="signal-pills">
+                  <span className="card-label" title="AI order quantity recommendation">AI order quantity recommendation</span>
+                  {/* Every status chip sits on its own row under the heading, and
+                      the row is always present, so the card's height does not
+                      shift as chips come and go between products. */}
+                  <div className="recommendation-signals">
                     {decision.noSuitableMatch
                       ? <NoMatchPill />
-                      : <MatchConfidencePill confidence={decision.matchConfidence} detailed />}
+                      : <MatchConfidencePill confidence={decision.matchConfidence} />}
                     {decision.forecast?.wideUncertainty && (
                       <span
                         className="warning-chip"
@@ -957,34 +1002,53 @@ function App() {
                     {decision.quantityCapped && (
                       <span
                         className="warning-chip"
-                        title={`The model wanted more than the ${numberFormatter.format(decision.buyCeiling)}-unit ${selected.itemType} buy ceiling to reach ${Math.round(targetSellThrough * 100)}% expected sell-through. This number is a policy limit, not a target that was actually reached.`}
+                        title={`The model wanted more than the ${numberFormatter.format(decision.buyCeiling)}-unit maximum order for ${selected.itemType} to reach ${Math.round(targetSellThrough * 100)}% expected sell-through. This number is a policy limit, not a target that was actually reached.`}
                       >
-                        Capped at max buy
+                        Capped at max order
+                      </span>
+                    )}
+                    {sales.demandExceedsOrder && (
+                      <span
+                        className="warning-chip"
+                        title={`Forecast demand is ${numberFormatter.format(headlineDemand(decision))} units, above this ${numberFormatter.format(finalQuantity)}-unit order. Sales are limited by the order, not by demand — lower the target sell-through or raise the planner quantity to capture more.`}
+                      >
+                        Demand exceeds order
                       </span>
                     )}
                   </div>
                 </div>
                 <div className="quantity-hero">
                   <div className="quantity-primary">
-                    <small>Order prediction</small>
+                    <small>{decision.forecast ? "Initial order to place" : "Order prediction"}</small>
                     <div>
                       <strong>{numberFormatter.format(finalQuantity)}</strong>
                       <span>units</span>
                     </div>
-                    <p>
-                      {decision.forecast
-                        ? `${Math.round(targetSellThrough * 100)}% sell-through · ${numberFormatter.format(decision.low)}–${numberFormatter.format(decision.high)}`
-                        : `Selected product's sales ÷ ${Math.round(targetSellThrough * 100)}% target sell-through`}
-                    </p>
+                    {!decision.forecast && (
+                      <p>Selected product&apos;s sales ÷ {Math.round(targetSellThrough * 100)}% target sell-through</p>
+                    )}
                   </div>
                   <div className="quantity-secondary">
-                    <small>{decision.forecast ? "Sales prediction" : "Matched product sales"}</small>
-                    <strong>{numberFormatter.format(headlineDemand(decision))} units</strong>
-                    <span>
-                      {decision.forecast
-                        ? `80%: ${numberFormatter.format(decision.salesLow)}–${numberFormatter.format(decision.salesHigh)} · ${decision.forecast.analoguesUsed} analogue${decision.forecast.analoguesUsed === 1 ? "" : "s"}`
-                        : "Cleaned observed sales from the one selected historical product"}
-                    </span>
+                    <small>{decision.forecast ? "Typical sales forecast" : "Matched product sales"}</small>
+                    <strong>{numberFormatter.format(sales.headline)} units</strong>
+                    {decision.forecast ? (
+                      <div
+                        className="forecast-evidence"
+                        title="The model estimates an 80% chance that sales will fall within this range."
+                      >
+                        <div className="forecast-range">
+                          <span className="forecast-range-label">Likely sales range <em>80%</em></span>
+                          <strong className="forecast-range-value">
+                            {numberFormatter.format(sales.low)}–{numberFormatter.format(sales.high)} <small>units</small>
+                          </strong>
+                        </div>
+                        <span className="forecast-evidence-note">
+                          Based on <b>{decision.forecast.analoguesUsed}</b> similar past style{decision.forecast.analoguesUsed === 1 ? "" : "s"}
+                        </span>
+                      </div>
+                    ) : (
+                      <span>Cleaned observed sales from the one selected historical product</span>
+                    )}
                   </div>
                 </div>
                 <div className="match-confidence-row">
@@ -1004,10 +1068,13 @@ function App() {
                     ) : (
                       decision.forecast ? (
                         <>
-                          Forecast: <b>{numberFormatter.format(headlineDemand(decision))} units</b> ({numberFormatter.format(decision.salesLow)}–{numberFormatter.format(decision.salesHigh)}, {decision.forecast.analoguesUsed} {decision.forecast.analoguesUsed === 1 ? "analogue" : "analogues"}).{decision.forecast.wideUncertainty ? " Evidence is thin, so treat the range as the estimate." : ""}{" "}
+                          {/* Demand, deliberately unclipped: the sales figure above is
+                              what this order can deliver, and this is the market it is
+                              being judged against. The labels must keep them apart. */}
+                          Forecast demand: <b>{numberFormatter.format(headlineDemand(decision))} units</b> ({numberFormatter.format(decision.salesLow)}–{numberFormatter.format(decision.salesHigh)}, {decision.forecast.analoguesUsed} {decision.forecast.analoguesUsed === 1 ? "analogue" : "analogues"}).{decision.forecast.wideUncertainty ? " Evidence is thin, so treat the range as the estimate." : ""}{" "}
                           {decision.quantityCapped ? (
                             <>
-                              Capped at the {selected.itemType} ceiling of <b>{numberFormatter.format(decision.buyCeiling)} units</b>.
+                              Capped at the {selected.itemType} maximum order of <b>{numberFormatter.format(decision.buyCeiling)} units</b>.
                             </>
                           ) : (
                             <>
@@ -1126,10 +1193,22 @@ function App() {
                     onChange={(event) => changeTargetSellThrough(Number(event.target.value) / 100)}
                     aria-label="Target sell-through"
                   />
+                  {/* Written as a live sentence rather than a static definition: the
+                      figure tracks the slider, and the two clauses tell the planner
+                      which way to move it and what they trade away by doing so. */}
                   <small className="setting-help">
-                    {demandModel
-                      ? "The buy is solved so expected sales reach this share of it, given the forecast range. Rounded to packs of 25."
-                      : "Order prediction = selected product sales ÷ target sell-through, rounded to packs of 25."}
+                    {demandModel ? (
+                      <>
+                        Aim to sell <b>{Math.round(targetSellThrough * 100)}%</b> of what you order.
+                        Raise it for a smaller, safer order; lower it for a larger one that chases
+                        more demand.
+                      </>
+                    ) : (
+                      <>
+                        Aim to sell <b>{Math.round(targetSellThrough * 100)}%</b> of what you order.
+                        The order is the matched product sales divided by this target.
+                      </>
+                    )}
                   </small>
                 </label>
                 {focusedHistory && focusedMatch ? (
@@ -1321,6 +1400,9 @@ function App() {
                     ? undefined
                     : itemDecision.ranked[0];
                   const historical = top ? historyById.get(top.historicalId) : undefined;
+                  // This column is headed "Sales prediction", so it is bounded by
+                  // the buy the same way the workspace card is.
+                  const itemSales = salesFromOrder(itemDecision, overrides[item.id] ?? itemDecision.quantity);
                   return (
                     <tr key={item.id}>
                       <td><div className="table-product"><ProductImage src={item.imageUrl} alt={item.id} className="table-image" /><span><strong>{item.id}</strong><small>{item.colour}</small></span></div></td>
@@ -1341,12 +1423,12 @@ function App() {
                       </td>
                       <td><div className="table-signals">{itemDecision.noSuitableMatch ? <NoMatchPill /> : <MatchConfidencePill confidence={itemDecision.matchConfidence} detailed />}</div></td>
                       <td>
-                        <strong>{numberFormatter.format(headlineDemand(itemDecision))}</strong>
+                        <strong>{numberFormatter.format(itemSales.headline)}</strong>
                         <small>
                           {itemDecision.noSuitableMatch
                             ? "not generated"
                             : itemDecision.forecast
-                              ? `${numberFormatter.format(itemDecision.salesLow)}–${numberFormatter.format(itemDecision.salesHigh)}`
+                              ? `${numberFormatter.format(itemSales.low)}–${numberFormatter.format(itemSales.high)}`
                               : "selected product actual"}
                         </small>
                       </td>

@@ -171,4 +171,22 @@ test("keeps the pooled predictive forecast contract intact", async () => {
   assert.match(pageSource, /packRoundedUncapped/);
   assert.doesNotMatch(pageSource, /Attribute weight|Inventory strategy|Machine-learning sales forecast|Sales backtest WAPE/);
   assert.doesNotMatch(pageSource, /colourFamily|Colour family/);
+  // Keep the planner export focused on decisions. These model-internal CSV
+  // columns previously exposed competing forecast values and unexplained
+  // percentile jargon, making a single recommendation look contradictory.
+  assert.doesNotMatch(pageSource, /"Forecast demand \(average\)"/);
+  assert.doesNotMatch(pageSource, /"Forecast low \(p10\)"/);
+  assert.doesNotMatch(pageSource, /"Forecast high \(p90\)"/);
+  assert.doesNotMatch(pageSource, /"Range tail hit ceiling"/);
+  assert.match(pageSource, /"Product ID"/);
+  assert.match(pageSource, /"Overall similarity \(%\)"/);
+  assert.match(pageSource, /"Colour similarity \(%\)"/);
+  assert.match(pageSource, /"Pattern similarity \(%\)"/);
+  assert.match(pageSource, /"Style similarity \(%\)"/);
+  assert.match(pageSource, /"Texture similarity \(%\)"/);
+  assert.match(pageSource, /"Expected sales \(units\)"/);
+  assert.match(pageSource, /"Recommended order \(units\)"/);
+  assert.match(pageSource, /"Final order \(units\)"/);
+  assert.doesNotMatch(pageSource, /"Estimated demand \(units\)"/);
+  assert.doesNotMatch(pageSource, /"Analogue actual sales"|"Analogue original order"|"AI recommended quantity"/);
 });
