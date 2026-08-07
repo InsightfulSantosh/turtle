@@ -55,7 +55,7 @@ def test_single_visual_analogue_supplies_sales_and_sell_through_buy() -> None:
         {"historicalId": "AW25-OTTR-1", "visualScore": 0.70, "hybridScore": 0.70},
         {"historicalId": "AW25-OTTR-2", "visualScore": 0.69, "hybridScore": 0.69},
     ]
-    result = recommend_one({}, history, matches, {"topK": 3})
+    result = recommend_one({}, history, matches)
     assert result["expectedSales"] == 525
     assert result["quantity"] == 750
     assert result["analogueSales"] == 525
@@ -66,7 +66,7 @@ def test_single_visual_analogue_supplies_sales_and_sell_through_buy() -> None:
 
 
 def test_no_visual_match_returns_manual_review_zeroes() -> None:
-    result = recommend_one({}, [], [], {"topK": 3})
+    result = recommend_one({}, [], [])
     assert result["noSuitableMatch"] is True
     assert result["expectedSales"] == 0
     assert result["quantity"] == 0

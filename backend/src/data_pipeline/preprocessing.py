@@ -7,7 +7,6 @@ import unicodedata
 from dataclasses import asdict, dataclass
 from typing import Any
 
-
 IDENTIFIER_COMPONENT_PATTERN = re.compile(
     r"^(?P<prefix>[A-Z0-9]{4})"
     r"(?P<style>[A-Z0-9]+)"
@@ -139,11 +138,7 @@ def standardize_fabric(value: object) -> str:
         or "EXC" in text
         or (compact.startswith("PVL") and not text.startswith("PV LINEN"))
         or text == "TR"
-        or text.startswith("TR ")
-        or text.startswith("T/R")
-        or text.startswith("T/V")
-        or text.startswith("86%T ")
-        or text.startswith("C/T")
+        or text.startswith(("TR ", "T/R", "T/V", "86%T ", "C/T"))
     ):
         return "Review Required"
 
@@ -160,9 +155,7 @@ def standardize_fabric(value: object) -> str:
         token in text for token in ("VISCOSE", " VIS", "VIS/", "VIS(", "RAYON")
     )
     has_linen = "LINEN" in text or "LIN" in text
-    has_nylon = (
-        "NYLON" in text or text.startswith("R/N") or text.startswith("C/N")
-    )
+    has_nylon = "NYLON" in text or text.startswith(("R/N", "C/N"))
     has_bamboo = "BAMBOO" in text
     has_modal = "MODAL" in text
     has_tencel = "TENCEL" in text
@@ -217,7 +210,7 @@ def standardize_fabric(value: object) -> str:
             if stretch
             else "Polyester – Viscose Linen Blend"
         )
-    if text.startswith("PVS") or text.startswith("P/V/ELA"):
+    if text.startswith(("PVS", "P/V/ELA")):
         return "Polyester – Viscose Stretch"
     if text.startswith("PV") or (has_polyester and has_viscose):
         return (

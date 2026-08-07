@@ -123,7 +123,6 @@ def recommend_one(
     item: dict[str, Any],
     history: list[dict[str, Any]],
     matches: list[dict[str, Any]],
-    model: dict[str, Any],
     *,
     target_sell_through: float = DEFAULT_TARGET_SELL_THROUGH,
     minimum_visual_score: float = MIN_CONVINCING_VISUAL_SCORE,
@@ -604,7 +603,6 @@ def build_model_artifact(
             item,
             history,
             matches,
-            {"topK": 4},
             demand_priors=demand_priors,
             buy_ceilings=buy_ceilings,
         )
