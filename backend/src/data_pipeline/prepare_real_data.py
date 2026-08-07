@@ -16,7 +16,10 @@ from fashion_matching.preprocessing import ImagePreprocessor
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description=("Ingest, validate and preprocess the real workbooks, then build the visual recommendation artifact")
+        description=(
+            "Ingest, validate and preprocess the real workbooks, "
+            "then build the visual recommendation artifact"
+        )
     )
     parser.add_argument("--output", type=Path)
     parser.add_argument(

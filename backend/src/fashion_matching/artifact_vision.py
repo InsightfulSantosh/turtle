@@ -20,12 +20,12 @@ from fashion_matching.appearance import (
     TEXTURE_DESCRIPTOR_DIMENSION,
     FashionCandidateRetriever,
     body_pattern_views,
+    canonical_retrieval_value,
     cosine_distance,
     dominant_palette_distance,
     extract_pipeline_appearance_features,
-    canonical_retrieval_value,
-    requires_pattern_gate,
     requires_ottr_pattern_gate,
+    requires_pattern_gate,
 )
 from fashion_matching.encoders import FashionEncoder, ImageEncoder
 from fashion_matching.models import ManifestRecord

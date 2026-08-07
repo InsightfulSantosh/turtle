@@ -307,7 +307,7 @@ class RealDataPipeline:
             ranked = sorted(
                 strata[key],
                 key=lambda item: hashlib.sha256(
-                    f"{sample_seed}:{item['id']}".encode("utf-8")
+                    f"{sample_seed}:{item['id']}".encode()
                 ).hexdigest(),
             )
             selected.extend(ranked[: allocations[key]])

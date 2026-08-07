@@ -10,6 +10,8 @@ from data_pipeline.preprocessing import (
     parse_integer,
     parse_number,
 )
+
+
 @dataclass(frozen=True)
 class FeatureEngineeringResult:
     historical: list[dict[str, Any]]

@@ -10,23 +10,17 @@ type HistoricalItem = {
   id: string;
   season: string;
   itemType: string;
-  style: string;
-  colourCode: string;
   design: string;
   categoryType: string;
   fabric: string;
   colour: string;
   order: number;
-  dispatch: number;
-  sales: number;
   sellThrough: number;
   imageUrl?: string | null;
-  hasVisualFeature: boolean;
   salesTarget: number;
   qualityFlags: string[];
   /** Log of the censoring-corrected weekly demand rate; absent on legacy artifacts. */
   weeklyLogRate?: number | null;
-  demandCensored?: boolean;
 };
 
 type DemandPrior = {
@@ -41,8 +35,6 @@ type DemandModel = {
   similarityExponent: number;
   minimumLogSigma: number;
   maximumLogSigma: number;
-  censorSellThrough: number;
-  groupShrinkageRows: number;
   maximumAnalogues: number;
   wideUncertaintyEffectiveN: number;
   wideUncertaintySkewRatio: number;
@@ -58,8 +50,6 @@ type DemandModel = {
 type BuyCeilings = {
   byItemType: Record<string, number>;
   globalCeiling: number;
-  multiplier: number;
-  floor: number;
 };
 
 type Match = {
@@ -69,135 +59,46 @@ type Match = {
   dinoVisualScore: number | null;
   colourVisualScore: number | null;
   textureVisualScore: number | null;
-  hybridScore: number;
 };
 
 type UpcomingItem = {
   id: string;
   itemType: string;
-  style: string;
-  colourCode: string;
   design: string;
   categoryType: string;
   fabric: string;
-  season: string;
   colour: string;
   imageUrl?: string | null;
-  hasVisualFeature: boolean;
   matches: Match[];
-  recommendation: {
-    quantity: number;
-    low: number;
-    high: number;
-    confidence: Confidence;
-    matchConfidence: Confidence;
-    noSuitableMatch: boolean;
-    expectedSales: number;
-    salesLow: number;
-    salesHigh: number;
-    analogueSales: number;
-    analogueQuantity: number;
-    evidencePolicy: string;
-    topMatchScore: number;
-    modelVersion: string;
-  };
-  modelFlags: string[];
+  /** Only the backend's own match confidence is read, and only to pick the
+   * product the workspace opens on: every shipped number is re-solved
+   * client-side so the planner's sliders stay live. */
+  recommendation: { matchConfidence: Confidence };
 };
 
 type ComparableProduct = Pick<UpcomingItem,
   "itemType" | "design" | "categoryType" | "fabric" | "colour"
 >;
 
+/**
+ * The slice of the published artifact this page actually reads. The artifact
+ * carries considerably more (provenance, calibration, preprocessing and quality
+ * blocks) — that contract is asserted by tests/season-intelligence.test.mjs and
+ * documented in the README, not restated here as types nothing consumes.
+ */
 type Dataset = {
   meta: {
-    title: string;
-    generatedAt: string;
-    dataMode: "sample" | "real";
     upcomingSeason: string;
-    historicalItems: number;
     upcomingItems: number;
-    historicalImageCoverage: number;
     upcomingImageCoverage: number;
     missingUpcomingImages: string[];
-    confidenceCounts: Record<Confidence, number>;
-    matchConfidenceCounts: Record<Confidence, number>;
-    visualMethod: string;
     visionModel: {
-      modelId: string;
-      modelRevision: string | null;
-      embeddingDimension: number;
-      device: string;
       historicalCoverage: number;
       upcomingCoverage: number;
-      reranker?: {
-        modelId: string;
-        modelRevision: string | null;
-        embeddingDimension: number;
-        device: string;
-        candidateCount: number;
-        weightGrid: number[];
-        sameItemTypeConstraint: boolean;
-        sameDesignConstraint?: boolean;
-        visualOnlyRanking?: boolean;
-        patternGate?: {
-          enabled: boolean;
-          method: string;
-          scope: string;
-          maximumDistance: number;
-          policy: string;
-        };
-        candidateIndex?: {
-          engine: string;
-          metric: string;
-          fallback: string;
-        };
-        appearance?: {
-          colourDescriptor: {
-            space: string;
-            method: string;
-            paletteSize: number;
-            distance: string;
-            normalisationScaleDeltaE: number;
-            fullImage: boolean;
-            region?: string;
-          };
-          colourGate?: {
-            enabled: boolean;
-            maximumDistance: number;
-            maximumDeltaE?: number;
-            policy: string;
-          };
-          itemTypeOverrides?: Record<string, {
-            analysisRegion: string;
-            relativeBox: number[];
-            usedFor: string[];
-            displayedImageModified: boolean;
-            patternHardGateDesigns: string[];
-          }>;
-          textureDescriptor: {
-            method: string;
-            dimension: number;
-          };
-          weights: Record<"neural" | "colour" | "texture", number>;
-        };
-      } | null;
     };
     model: {
-      version: string;
-      status: string;
-      algorithm: string;
-      evidencePolicy: string;
-      salesPolicy: string;
-      orderPolicy: string;
-      noMachineLearningForecast: boolean;
-      noAttributeMatching: boolean;
-      visualOnlyRanking?: boolean;
-      dinoRerankWeight?: number;
       minimumVisualScore: number;
       targetSellThrough?: number;
-      minimumMatchConfidence: Confidence;
-      noMatchPolicy: string;
-      topK: number;
       /** Present only when the artifact was built with the predictive estimator. */
       demandModel?: DemandModel;
       buyCeilings?: BuyCeilings;
@@ -245,7 +146,6 @@ const visualMatchingAvailable =
 const numberFormatter = new Intl.NumberFormat("en-IN");
 
 const attributeValueReaders: Record<string, (item: ComparableProduct) => string> = {
-  item: (product) => product.itemType,
   design: (product) => product.design,
   category_type: (product) => product.categoryType,
   fabric: (item) => item.fabric,
@@ -253,20 +153,18 @@ const attributeValueReaders: Record<string, (item: ComparableProduct) => string>
 };
 
 const attributeLabels: Record<string, string> = {
-  item: "Item",
   design: "Design",
   category_type: "Category Type",
   fabric: "Fabric",
   colour: "Colour",
 };
 
-const preferredCatalogAttributeOrder = [
+const catalogAttributeOrder = [
   "colour",
   "design",
   "fabric",
   "category_type",
 ] as const;
-const catalogAttributeOrder = preferredCatalogAttributeOrder;
 
 function attributeValue(item: ComparableProduct, key: string) {
   return attributeValueReaders[key]?.(item) || "Not provided";
@@ -401,7 +299,6 @@ function priorFor(item: ComparableProduct): DemandPrior | undefined {
 type DemandForecast = {
   expectedSales: number;
   medianDemand: number;
-  skewRatio: number;
   wideUncertainty: boolean;
   salesLow: number;
   salesHigh: number;
@@ -414,8 +311,6 @@ type DemandForecast = {
   highCapped: boolean;
   buyCeiling: number;
   analoguesUsed: number;
-  analogueWeight: number;
-  logSigma: number;
 };
 
 /**
@@ -492,7 +387,6 @@ function forecastDemand(
   return {
     expectedSales: packRoundedCapped(pointDemand, ceiling),
     medianDemand: packRoundedCapped(medianDemand, ceiling),
-    skewRatio,
     wideUncertainty,
     salesLow: packRoundedCapped(p10, ceiling),
     salesHigh: packRoundedCapped(p90, ceiling),
@@ -503,8 +397,6 @@ function forecastDemand(
     highCapped: rawHigh > ceiling,
     buyCeiling: ceiling,
     analoguesUsed: logRates.length,
-    analogueWeight: shrinkage,
-    logSigma,
   };
 }
 
@@ -590,19 +482,11 @@ function ProductImage({
   eager?: boolean;
 }) {
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
-  const apiBase = (
-    process.env.NEXT_PUBLIC_TURTLE_API_URL ?? "http://localhost:8080"
-  ).replace(/\/$/, "");
-  const resolvedSrc = src?.startsWith("/v1/product-images/")
-    ? src.replace("/v1/product-images/", "/product-images/")
-    : src?.startsWith("/product-images/")
-      ? src
-      : src?.startsWith("/")
-        ? `${apiBase}${src}`
-        : src;
-  const failed = Boolean(resolvedSrc && failedSrc === resolvedSrc);
+  // Every imageUrl the artifact publishes is a /product-images/ path served by
+  // this app's own route handler; there is no live API to rebase against.
+  const failed = Boolean(src && failedSrc === src);
 
-  if (!resolvedSrc || failed) {
+  if (!src || failed) {
     return (
       <div className={`image-fallback ${className}`} aria-label={`${alt}: image unavailable`}>
         <span>Image pending</span>
@@ -616,11 +500,11 @@ function ProductImage({
     // eslint-disable-next-line @next/next/no-img-element
     <img
       className={className}
-      src={resolvedSrc}
+      src={src}
       alt={alt}
       loading={eager ? "eager" : "lazy"}
       referrerPolicy="no-referrer"
-      onError={() => setFailedSrc(resolvedSrc)}
+      onError={() => setFailedSrc(src)}
     />
   );
 }
