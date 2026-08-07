@@ -1,3 +1,7 @@
+/* Tailwind is imported for its preflight reset only — this app styles itself
+   with the hand-written rules below and uses no utility classes. Dropping the
+   import reverts line-height, image sizing (max-width/vertical-align) and form
+   control appearance to UA defaults across every element on the page. */
 @import "tailwindcss";
 
 :root {
@@ -17,7 +21,6 @@
   --amber-soft: #fff2d9;
   --red: #b64d45;
   --red-soft: #fff0ed;
-  --blue: #3f7a9b;
   --tile-bg: #f4f3ee;
   --shadow: 0 20px 60px rgba(18, 33, 28, 0.09);
   --shadow-soft: 0 8px 30px rgba(18, 33, 28, 0.06);
@@ -229,12 +232,6 @@ select:focus-visible {
 
 .button.primary.approved:hover {
   background: var(--forest);
-}
-
-.button.secondary {
-  background: var(--white);
-  border: 1px solid var(--line-dark);
-  color: var(--ink);
 }
 
 .comparison-shell {
@@ -494,8 +491,7 @@ select {
   gap: 3px 7px;
 }
 
-.mini-confidence,
-.mini-uncertainty {
+.mini-confidence {
   align-items: center;
   display: flex;
   font-size: 8px;
@@ -504,8 +500,7 @@ select {
   text-transform: uppercase;
 }
 
-.mini-confidence::before,
-.mini-uncertainty::before {
+.mini-confidence::before {
   border-radius: 50%;
   content: "";
   height: 6px;
@@ -517,9 +512,6 @@ select {
 .mini-confidence.low::before { background: var(--red); }
 .mini-confidence.no-match { color: var(--red); }
 .mini-confidence.no-match::before { background: var(--red); }
-.mini-uncertainty.narrow::before { background: #4d9b5f; }
-.mini-uncertainty.moderate::before { background: var(--amber); }
-.mini-uncertainty.wide::before { background: var(--red); }
 
 .queue-qty {
   align-self: center;
@@ -794,29 +786,6 @@ select {
   word-break: normal;
 }
 
-.catalog-attribute-toggle {
-  background: var(--white);
-  border: 1px solid var(--line-dark);
-  border-radius: 6px;
-  color: var(--forest-2);
-  cursor: pointer;
-  font-size: 8px;
-  font-weight: 900;
-  letter-spacing: 0.04em;
-  margin: 0;
-  min-height: 24px;
-  padding: 4px 7px;
-  text-transform: uppercase;
-  transition: background 140ms ease, border-color 140ms ease;
-  white-space: nowrap;
-  width: auto;
-}
-
-.catalog-attribute-toggle:hover {
-  background: var(--lime-soft);
-  border-color: var(--forest-2);
-}
-
 .recommendation-card {
   background:
     radial-gradient(circle at 100% 0%, rgba(184, 220, 93, 0.18), transparent 18rem),
@@ -904,31 +873,6 @@ select {
 .table-signals {
   align-items: flex-start;
   flex-direction: column;
-}
-
-.uncertainty-pill {
-  border-radius: 999px;
-  display: inline-flex;
-  font-size: 9px;
-  font-weight: 900;
-  padding: 6px 9px;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.uncertainty-pill.narrow {
-  background: #e3f4e5;
-  color: #28713b;
-}
-
-.uncertainty-pill.moderate {
-  background: var(--amber-soft);
-  color: #8d5d13;
-}
-
-.uncertainty-pill.wide {
-  background: var(--red-soft);
-  color: var(--red);
 }
 
 .quantity-hero {
@@ -1233,8 +1177,7 @@ select {
   padding: 15px;
 }
 
-.range-control,
-.select-control {
+.range-control {
   border-bottom: 1px solid var(--line);
   color: var(--muted);
   display: block;
@@ -1275,65 +1218,6 @@ select {
   margin-top: 6px;
 }
 
-.select-control select {
-  display: block;
-  margin-top: 8px;
-  width: 100%;
-}
-
-.analogue-count-control > span {
-  align-items: center;
-  display: flex;
-  gap: 8px;
-  justify-content: space-between;
-}
-
-.analogue-count-control b {
-  color: var(--ink-soft);
-  font-size: 10px;
-}
-
-.analogue-count-control strong {
-  background: #e6f0dd;
-  border-radius: 999px;
-  color: var(--forest-2);
-  font-size: 7px;
-  letter-spacing: 0.06em;
-  padding: 5px 7px;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.analogue-count-control small {
-  color: var(--muted);
-  display: block;
-  font-size: 8px;
-  font-weight: 600;
-  line-height: 1.45;
-  margin-top: 7px;
-}
-
-.method-note {
-  background: #edf3f0;
-  border-radius: 12px;
-  margin-top: 14px;
-  padding: 12px;
-}
-
-.method-note span {
-  color: var(--forest-2);
-  font-size: 9px;
-  font-weight: 900;
-  text-transform: uppercase;
-}
-
-.method-note p {
-  color: var(--muted);
-  font-size: 9px;
-  line-height: 1.5;
-  margin: 5px 0 0;
-}
-
 .matches-section {
   margin: 22px auto 0;
   max-width: 1500px;
@@ -1367,7 +1251,6 @@ select {
   width: 7px;
 }
 
-.score-legend i.attr { background: var(--forest-2); }
 .score-legend i.visual { background: var(--lime); }
 
 .section-supporting-copy {
@@ -1445,14 +1328,6 @@ select {
   margin-top: 13px;
 }
 
-.match-grid.match-grid-3 {
-  column-gap: 24px;
-  grid-template-columns: repeat(3, minmax(0, 230px));
-  justify-content: center;
-  padding: 0;
-  width: 100%;
-}
-
 .match-grid.match-grid-4 {
   align-items: stretch;
   column-gap: 18px;
@@ -1462,69 +1337,11 @@ select {
   width: 100%;
 }
 
-.match-grid.match-grid-5 {
-  grid-template-columns: repeat(5, max(200px, calc((100% - 36px) / 4)));
-}
-
-.match-grid.match-grid-8 {
-  grid-template-columns: repeat(8, max(200px, calc((100% - 36px) / 4)));
-}
-
-.match-grid.match-grid-5,
-.match-grid.match-grid-8 {
-  column-gap: 12px;
-  overflow-x: auto;
-  overscroll-behavior-inline: contain;
-  padding: 0 12px 6px;
-  scrollbar-color: var(--line-dark) transparent;
-  scrollbar-width: thin;
-}
-
 .match-card {
   overflow: hidden;
   padding: 0;
   position: relative;
   transition: border-color 160ms ease, box-shadow 160ms ease;
-}
-
-.empty-recommendation-card {
-  align-items: center;
-  background: #f5f4ef;
-  border-style: dashed;
-  box-shadow: none;
-  display: flex;
-  height: 100%;
-  justify-content: center;
-  min-height: 100%;
-  padding: 24px 16px;
-  text-align: center;
-}
-
-.empty-recommendation-card > div > span {
-  align-items: center;
-  background: var(--white);
-  border: 1px solid var(--line-dark);
-  border-radius: 50%;
-  color: var(--muted);
-  display: inline-flex;
-  font-size: 18px;
-  height: 40px;
-  justify-content: center;
-  margin-bottom: 12px;
-  width: 40px;
-}
-
-.empty-recommendation-card strong {
-  display: block;
-  font-size: 11px;
-  line-height: 1.35;
-}
-
-.empty-recommendation-card p {
-  color: var(--muted);
-  font-size: 8px;
-  line-height: 1.5;
-  margin: 7px 0 0;
 }
 
 .match-card::after {
@@ -1726,12 +1543,6 @@ select {
   margin-top: 0;
   min-height: 0;
   text-align: left;
-}
-
-.match-card .catalog-attribute-toggle {
-  font-weight: 800;
-  min-height: 20px;
-  padding: 2px 5px;
 }
 
 .match-performance {
@@ -2040,24 +1851,9 @@ select {
   padding: 2px 5px;
 }
 
-.attribute-match-status small {
-  font-size: inherit;
-  opacity: 0.72;
-}
-
 .attribute-match-status.exact {
   background: #dcecdf;
   color: #275f3c;
-}
-
-.attribute-match-status.related {
-  background: #e9efcf;
-  color: #596b16;
-}
-
-.attribute-match-status.partial {
-  background: #f4e8c9;
-  color: #765a12;
 }
 
 .attribute-match-status.different {
@@ -2332,29 +2128,13 @@ select {
     grid-column: auto;
   }
 
-  .settings-card .range-control,
-  .settings-card .select-control {
+  .settings-card .range-control {
     border-bottom: 1px solid var(--line);
     padding: 14px 2px;
   }
 
-  .settings-card .method-note {
-    grid-column: auto;
-    margin-top: 14px;
-  }
-
-  .settings-card .analogue-count-control {
-    grid-column: 1 / span 2;
-  }
-
-  .match-grid,
-  .match-grid-3 {
+  .match-grid {
     grid-template-columns: repeat(3, 1fr);
-  }
-
-  .match-grid.match-grid-3 {
-    grid-template-columns: repeat(3, minmax(0, 230px));
-    justify-content: center;
   }
 
   .match-grid.match-grid-4 {
@@ -2430,24 +2210,13 @@ select {
     display: block;
   }
 
-  .settings-card > .range-control,
-  .settings-card > .select-control {
+  .settings-card > .range-control {
     border-bottom: 1px solid var(--line);
     padding: 14px 2px;
   }
 
-  .settings-card .method-note {
-    margin-top: 14px;
-  }
-
-  .match-grid,
-  .match-grid-3 {
+  .match-grid {
     grid-template-columns: repeat(2, 1fr);
-  }
-
-  .match-grid.match-grid-3 {
-    grid-template-columns: repeat(2, minmax(0, 260px));
-    justify-content: start;
   }
 
   .match-grid.match-grid-4 {
@@ -2525,13 +2294,8 @@ select {
     flex-wrap: wrap;
   }
 
-  .match-grid,
-  .match-grid-3 {
+  .match-grid {
     grid-template-columns: 1fr;
-  }
-
-  .match-grid.match-grid-3 {
-    grid-template-columns: minmax(0, 320px);
   }
 
   .match-grid.match-grid-4 {

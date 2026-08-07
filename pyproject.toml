@@ -29,3 +29,9 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+# The backend packages live under backend/src, which ruff cannot infer from the
+# project root; without this it sorts them as third-party and interleaves them
+# with real third-party imports such as PIL.
+[tool.ruff.lint.isort]
+known-first-party = ["core", "data_pipeline", "fashion_matching", "machine_learning"]

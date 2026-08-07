@@ -169,8 +169,8 @@ def test_predictive_recommendation_is_not_a_copy_of_the_analogue() -> None:
     matches = [{"historicalId": f"H{index}", "visualScore": 0.88, "hybridScore": 0.88} for index in range(4)]
     item = {"id": "NEW", "itemType": "OTSH", "categoryType": "CASUAL"}
 
-    legacy = recommend_one(item, history, matches, {"topK": 4})
-    predictive = recommend_one(item, history, matches, {"topK": 4}, demand_priors=priors)
+    legacy = recommend_one(item, history, matches)
+    predictive = recommend_one(item, history, matches, demand_priors=priors)
 
     assert legacy["expectedSales"] == legacy["analogueSales"]
     assert predictive["expectedSales"] != predictive["analogueSales"]
@@ -185,7 +185,7 @@ def test_predictive_recommendation_publishes_a_real_interval() -> None:
     matches = [{"historicalId": f"H{index}", "visualScore": 0.88, "hybridScore": 0.88} for index in range(4)]
     item = {"id": "NEW", "itemType": "OTSH", "categoryType": "CASUAL"}
 
-    result = recommend_one(item, history, matches, {"topK": 4}, demand_priors=priors)
+    result = recommend_one(item, history, matches, demand_priors=priors)
 
     assert result["salesLow"] < result["expectedSales"] < result["salesHigh"]
     assert result["low"] < result["quantity"] < result["high"]
@@ -218,7 +218,7 @@ def test_wide_uncertainty_flags_thin_or_conflicting_evidence() -> None:
     item = {"id": "NEW", "itemType": "OTGL", "categoryType": "FORMAL"}
     matches = [{"historicalId": "G0", "visualScore": 0.51, "hybridScore": 0.51}]
 
-    result = recommend_one(item, history, matches, {"topK": 4}, demand_priors=priors)
+    result = recommend_one(item, history, matches, demand_priors=priors)
 
     assert result["demand"]["analoguesUsed"] == 1
     assert result["demand"]["skewRatio"] >= 1.5
@@ -236,7 +236,7 @@ def test_predictive_path_respects_the_no_match_policy() -> None:
     matches = [{"historicalId": "H0", "visualScore": 0.10, "hybridScore": 0.10}]
     item = {"id": "NEW", "itemType": "OTSH", "categoryType": "CASUAL"}
 
-    result = recommend_one(item, history, matches, {"topK": 4}, demand_priors=priors)
+    result = recommend_one(item, history, matches, demand_priors=priors)
 
     assert result["noSuitableMatch"] is True
     assert result["quantity"] == 0
@@ -252,8 +252,8 @@ def test_sell_through_target_moves_the_buy() -> None:
     matches = [{"historicalId": f"H{index}", "visualScore": 0.88, "hybridScore": 0.88} for index in range(4)]
     item = {"id": "NEW", "itemType": "OTSH", "categoryType": "CASUAL"}
 
-    conservative = recommend_one(item, history, matches, {}, target_sell_through=0.85, demand_priors=priors)
-    aggressive = recommend_one(item, history, matches, {}, target_sell_through=0.55, demand_priors=priors)
+    conservative = recommend_one(item, history, matches, target_sell_through=0.85, demand_priors=priors)
+    aggressive = recommend_one(item, history, matches, target_sell_through=0.55, demand_priors=priors)
 
     assert aggressive["quantity"] > conservative["quantity"]
 
@@ -274,7 +274,7 @@ def test_low_target_sell_through_is_flagged_as_capped_not_calibrated() -> None:
     expected_ceiling = ceilings.ceiling_for(item)
 
     capped = recommend_one(
-        item, history, matches, {}, target_sell_through=0.05, demand_priors=priors, buy_ceilings=ceilings
+        item, history, matches, target_sell_through=0.05, demand_priors=priors, buy_ceilings=ceilings
     )
     assert capped["quantity"] == expected_ceiling
     assert capped["buyCeiling"] == expected_ceiling
@@ -282,7 +282,7 @@ def test_low_target_sell_through_is_flagged_as_capped_not_calibrated() -> None:
     assert capped["highCapped"] is True
 
     normal = recommend_one(
-        item, history, matches, {}, target_sell_through=0.80, demand_priors=priors, buy_ceilings=ceilings
+        item, history, matches, target_sell_through=0.80, demand_priors=priors, buy_ceilings=ceilings
     )
     assert normal["quantity"] < expected_ceiling
     assert normal["quantityCapped"] is False

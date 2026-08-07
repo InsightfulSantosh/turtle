@@ -1,154 +1,196 @@
 # Turtle Season Intelligence
 
-The production image-first retrieval workflow, with separate image, text and
-structured-attribute signals, is documented in
-[FASHION_MATCHING.md](FASHION_MATCHING.md).
+Turtle Season Intelligence is a decision-support workspace for planning an
+upcoming fashion season. It turns historical ordering and sell-through data,
+upcoming catalogue records, and matched product images into a static planner
+that helps users review visual analogues, forecast demand, and choose an
+initial order quantity.
 
-Turtle Season Intelligence compares upcoming fashion styles with historical
-products, forecasts demand and supports an initial-order decision. The codebase
-is split into an independent Next.js frontend and a modular Python backend.
+It is intentionally not a live backend service. A Python pipeline produces a
+versioned JSON artifact; the independent Next.js application reads that file
+directly. This keeps every number shown in the browser traceable to a specific
+local data build.
 
-The current browser artifact is built from the real historical and SS27
-workbooks in `DATA/raw`. Model limitations and forecast uncertainty remain
-visible in the application and should be treated as decision support rather
-than production certification.
+> Forecasts are planning evidence, not production certification. Image-match
+> thresholds, model revisions, and demand uncertainty should be reviewed before
+> commercial decisions are made.
+
+## What the project does
+
+- Ingests the supplied historical and SS27 `.xlsb` workbooks.
+- Validates, cleans, and standardizes catalogue data to a common schema.
+- Matches local product images to catalogue identifiers.
+- Retrieves visually similar historical products using FashionSigLIP, then
+  verifies colour, texture, pattern, and construction with DINOv2-based
+  evidence.
+- Estimates demand from accepted visual analogues, correcting for historical
+  exposure and stock constraints, then recommends a pack-rounded initial buy
+  for a target sell-through.
+- Publishes the planner artifact consumed by the frontend—no runtime API or
+  browser-to-Python connection is required.
+
+The visual retrieval design, indexing workflow, score semantics, and evaluation
+guidance are documented in [FASHION_MATCHING.md](FASHION_MATCHING.md).
 
 ## Architecture
 
 ```text
-turtle/
-├── DATA/                              Raw workbooks/images in, cleaned CSVs out (see Central configuration)
-│   ├── raw/                           Source .xlsb workbooks and matched product images
-│   └── processed/                     Cleaned CSVs and the validation report
-├── frontend/                          Next.js planner application
-│   ├── app/                           Pages, styles and generated-data.json
-│   ├── public/                        Static assets
-│   └── tests/                         Frontend and artifact-contract tests
-├── backend/                           Python data-science pipeline (no live API)
-│   ├── src/
-│   │   ├── core/                      Central configuration and paths
-│   │   ├── data_pipeline/             Workbook validation and preparation
-│   │   ├── fashion_matching/          Visual retrieval, encoding and image validation
-│   │   └── machine_learning/          Analogue similarity and predictive demand models
-│   └── tests/                         Backend unit and contract tests
-├── .env.example                       Template for local/deployment environment variables
-├── requirements.txt                   Single source of truth for backend dependencies
-├── pyproject.toml                     Backend package, pytest and ruff configuration
-├── Makefile                           Central developer commands
-├── FASHION_MATCHING.md                Visual retrieval workflow deep dive
-└── Business_Process_Document_AI_Order_Quantity_Tool.pdf   Source business requirements
+Raw workbooks + product images
+             |
+             v
+Python data pipeline
+  ingestion -> validation -> cleaning -> feature engineering
+             |
+             +--> optional visual retrieval and reranking
+             |
+             v
+Demand model + order recommendation
+             |
+             v
+frontend/app/generated-data.json
+             |
+             v
+Next.js planner and same-origin product-image route
 ```
-
-The dependency direction is intentional:
 
 ```text
-data_pipeline (CLI)
-      ↓
-machine learning + fashion matching
-      ↓
-core configuration
+turtle/
+├── backend/
+│   ├── src/core/                 Shared project paths and environment overrides
+│   ├── src/data_pipeline/        Workbook ingestion, validation and export
+│   ├── src/fashion_matching/     Image retrieval, encoders and evaluation
+│   ├── src/machine_learning/     Demand forecast and order-quantity logic
+│   └── tests/                    Python unit and contract tests
+├── frontend/
+│   ├── app/                      Next.js planner, image route and JSON artifact
+│   ├── public/                   Static assets
+│   └── tests/                    Browser-artifact contract tests
+├── DATA/                         Local input and generated data; ignored by Git
+│   ├── raw/                      Source workbooks and matched product images
+│   └── processed/                Cleaned CSVs and validation report
+├── .env.example                  Visual matching and optional Qdrant settings
+├── requirements.txt              Backend dependency source of truth
+├── Makefile                      Common developer commands
+├── FASHION_MATCHING.md           Detailed visual-matching documentation
+└── Business_Process_Document_AI_Order_Quantity_Tool.pdf
 ```
 
-The backend is a CLI-driven pipeline, not a live service: it writes the
-versioned browser artifact to `frontend/app/generated-data.json`, and the
-frontend reads that static file directly. Frontend code does not import
-backend internals or call a backend API at runtime; product images are
-served by the frontend's own route, which reads `DATA/raw` directly.
+## Prerequisites
 
-## Central configuration
+- Python 3.12 or newer
+- [uv](https://docs.astral.sh/uv/) for the Python environment
+- Node.js 22.13 or newer and npm
+- LibreOffice, with `soffice` available on `PATH`, to convert the supplied
+  `.xlsb` workbooks to `.xlsx`
 
-All local paths are defined in `backend/src/core/config.py`.
-
-The defaults are:
-
-- Raw source workbooks and product images: `DATA/raw`
-- Cleaned datasets and validation report: `DATA/processed`
-- Temporary workbook conversions: `tmp`
-- Browser model artifact: `frontend/app/generated-data.json`
-
-Deployments can override them with:
-
-- `TURTLE_DATA_ROOT`
-- `TURTLE_TEMP_ROOT`
-- `TURTLE_MODEL_ARTIFACT`
-
-## Setup
-
-Prerequisites:
-
-- Python 3.12
-- [uv](https://docs.astral.sh/uv/) for virtual environment and package management
-- Node.js 22.13 or newer
-- npm
-- LibreOffice for `.xlsb` conversion
-
-On macOS, install LibreOffice and uv with Homebrew:
+On macOS with Homebrew:
 
 ```bash
-brew install --cask libreoffice
 brew install uv
+brew install --cask libreoffice
+which soffice
 ```
 
-`soffice` must be on `PATH` afterward (`which soffice`) — the data pipeline
-shells out to it to convert the raw `.xlsb` workbooks and fails with a clear
-error if it's missing.
+`make data` and `make data-vision` fail early if `soffice` is unavailable.
 
-From the repository root, `requirements.txt` is the single source of truth
-for backend Python dependencies:
+## Quick start
+
+From the repository root:
 
 ```bash
 uv venv .venv
 uv pip install -r requirements.txt
-npm --prefix frontend install
+npm --prefix frontend ci
+
+# Required only when rebuilding the visual artifact.
+cp .env.example .env
+set -a && source .env && set +a
+
+make data-vision
+make frontend-dev
 ```
 
-## Common commands
+Open [http://localhost:3000](http://localhost:3000). The frontend serves local
+catalogue images itself, so a separate Python API process is not needed.
 
-```bash
-make data            # rebuild the frontend artifact from the real workbooks
-make frontend-dev    # run the planner at http://localhost:3000
-make backend-test    # run Python tests
-make frontend-test   # build and test the Next.js application
-make test            # run both test suites
+The first visual build downloads the configured encoder weights through the
+normal Hugging Face cache. It can take appreciably longer than subsequent
+builds; CPU builds are suitable for development but may be slow for a full
+catalogue.
+
+## Required local data
+
+`DATA/` is deliberately ignored by Git. To run a real-data build, create this
+layout (or point `TURTLE_DATA_ROOT` at an equivalent directory):
+
+```text
+DATA/
+└── raw/
+    ├── LAST SEASONES ORDERING & SALE THRU DATA.xlsb
+    ├── SEG WISE SS27 MASTER SHEET TILL.xlsb
+    ├── historical_matched_images/
+    │   └── <historical-product-id>.jpg|jpeg|png|webp
+    └── upcoming_ss27_matched_images/
+        └── <upcoming-product-id>.jpg|jpeg|png|webp
 ```
 
-The frontend runs by itself because it reads the generated JSON artifact
-directly; there is no live backend service to run alongside it.
+Image filenames are matched case-insensitively by filename stem to their
+catalogue product ID. The browser image route supports JPG, JPEG, PNG, and
+WebP. Missing images do not stop the data-cleaning pipeline, but visual
+retrieval needs matched images; the planner prioritizes image-backed upcoming
+styles and analogues.
 
-## Backend
+The pipeline reads `Sheet1` from both workbooks. It accepts the current
+catalogue-oriented headers as well as the earlier compatible historical layout,
+then writes these local outputs:
 
-The backend is a Python 3.12 src-layout data-science package with no live
-API — it is a CLI-driven pipeline that writes a versioned browser artifact
-consumed directly by the frontend. It keeps data preparation, visual
-matching and machine learning concerns separate while sharing one
-configuration.
+```text
+DATA/processed/historical_cleaned.csv
+DATA/processed/upcoming_cleaned.csv
+DATA/processed/data_cleaning_validation.csv
+tmp/real-data-converted/                    # cached workbook conversions
+frontend/app/generated-data.json            # browser artifact
+```
 
-| Location | Responsibility |
-|---|---|
-| `backend/src/core/` | Environment and filesystem configuration |
-| `backend/src/data_pipeline/` | Real workbook ingestion, validation and artifact export |
-| `backend/src/fashion_matching/` | Visual retrieval, image encoding and validation |
-| `backend/src/machine_learning/` | Analogue similarity and predictive demand estimation |
+During preparation it removes zero-sales historical rows, removes upcoming item
+types with no retained historical coverage, normalizes identifiers and fabric
+families, and records data-quality counts in the validation report and artifact
+metadata.
 
-### Rebuild real data
+## Build the planner artifact
+
+### Standard data build
 
 ```bash
 make data
 ```
 
-To map local product images, generate fashion-domain image embeddings and
-rebuild the browser artifact with visual similarity:
+This validates and processes the workbooks, maps product images, fits the demand
+model, and writes `frontend/app/generated-data.json`. It does not create image
+embeddings, so it is useful for validating data inputs but is not the normal
+visual-planner build.
+
+### Visual production-style build
 
 ```bash
 make data-vision
 ```
 
-This requires LibreOffice (`soffice` on `PATH` — see Setup above) and uses
-the cached models under the normal Hugging Face cache directory.
+This additionally generates FashionSigLIP embeddings for mapped product images,
+retrieves candidates from the same item type, and reranks them with image-based
+colour, texture, pattern, and DINOv2 construction evidence. The model uses
+visual ranking only by default; workbook attributes and descriptions are not
+mixed into its score.
 
-To rebuild against only a deterministic sample of the upcoming catalogue
-(faster iteration, same underlying model and gating logic) instead of the
-full run:
+For an isolated preview without overwriting the active browser artifact:
+
+```bash
+PYTHONPATH=backend/src .venv/bin/python -m data_pipeline.prepare_real_data \
+  --with-vision --item-type OTSH \
+  --output frontend/app/generated-data-otsh-preview.json
+```
+
+For a deterministic, balanced sample of the upcoming catalogue:
 
 ```bash
 PYTHONPATH=backend/src .venv/bin/python -m data_pipeline.prepare_real_data \
@@ -156,93 +198,81 @@ PYTHONPATH=backend/src .venv/bin/python -m data_pipeline.prepare_real_data \
   --log-file tmp/data-vision-progress.log
 ```
 
-The pooled, censoring-corrected predictive estimator is always used — there
-is no flag to fall back to the legacy copy-one-analogue rule; that rule only
-still applies per-item, automatically, when a product has no accepted visual
-analogue to pool from. `--sample-size` selects a stratified sample balanced
-across item type and category type; `--sample-seed` (default `27`) keeps the
-same sample stable across reruns. Omit `--output` to write directly to
-`frontend/app/generated-data.json` (the same file `make data-vision` writes),
-or pass `--output` with a different path to build a side-by-side preview
-without touching the live artifact.
+`--item-type` and `--sample-size` are mutually exclusive. A sample is balanced
+first across item type and then category type; the full historical catalogue
+remains available as the analogue pool. Use `--output` for any review artifact
+so the live frontend file is not replaced accidentally.
 
-The pipeline reads the two real `.xlsb` workbooks from `DATA/raw`, converts them
-through LibreOffice when needed, validates and cleans the records, standardizes
-both datasets to a shared snake_case schema, saves the cleaned datasets and
-validation report under `DATA/processed`, excludes zero-sales historical rows
-from training, excludes upcoming item types without retained historical
-coverage, fits the current model and atomically writes
-`frontend/app/generated-data.json`.
+## Forecast and recommendation policy
 
-Image filenames are matched case-insensitively to catalogue product IDs from
-`DATA/raw/historical_matched_images` and
-`DATA/raw/upcoming_ss27_matched_images`. The browser intentionally lists only
-upcoming styles with mapped images and only image-backed historical analogues.
-The Next.js application serves these files through a same-origin image route,
-so `make frontend-dev` is sufficient for the planner UI.
+Only visual analogues that meet the minimum visual score (default `0.50`) and
+reach at least Medium confidence can produce a recommendation. Otherwise the
+artifact reports no suitable match and returns no sales forecast or order
+quantity for that product.
 
-Similarity and demand features use only Item, Design, Colour, Category Type and
-Fabric. Category Type is standardized to `FORMAL`, `CASUAL`, `DENIM` or
-`CEREMONIAL` during preprocessing.
+For accepted matches, the backend:
 
-#### Pipeline modules
+1. pools accepted visual analogues rather than simply copying one product's
+   sales;
+2. estimates a censoring-aware weekly demand rate from historical sales,
+   inventory exposure, and age;
+3. shrinks sparse evidence toward hierarchical category priors;
+4. produces a lognormal demand distribution and uncertainty bands; and
+5. solves a newsvendor order quantity for the current target sell-through,
+   rounded to packs of 25.
 
-| File | Pipeline responsibility |
+Buy ceilings are derived per item type from the historical data. A ceiling is a
+policy guardrail, not evidence that the forecast has reached the chosen
+sell-through target. The UI exposes the selected analogue, forecast range,
+confidence, evidence diagnostics, and capped-quantity status so a planner can
+review the recommendation.
+
+## Configuration
+
+Copy `.env.example` to `.env` and load it into the shell before a visual build:
+
+```bash
+cp .env.example .env
+set -a && source .env && set +a
+```
+
+Important configuration groups:
+
+| Setting | Purpose |
 |---|---|
-| `backend/src/data_pipeline/settings.py` | Source, temporary and artifact paths |
-| `backend/src/data_pipeline/ingestion.py` | Workbook discovery, conversion and row loading |
-| `backend/src/data_pipeline/validation.py` | Post-cleaning identifier and fabric quality gates |
-| `backend/src/data_pipeline/preprocessing.py` | Identifier and fabric-family normalization rules |
-| `backend/src/data_pipeline/schema.py` | Canonical column mappings and schema-drift checks |
-| `backend/src/data_pipeline/feature_engineering.py` | Model-ready historical and upcoming records |
-| `backend/src/data_pipeline/pipeline.py` | End-to-end orchestration and atomic artifact export |
-| `backend/src/data_pipeline/prepare_real_data.py` | Thin command-line entry point |
+| `TURTLE_DATA_ROOT` | Overrides the default `DATA/` location for both pipeline and frontend image route. |
+| `TURTLE_TEMP_ROOT` | Overrides `tmp/`, including converted-workbook cache. |
+| `TURTLE_MODEL_ARTIFACT` | Overrides the generated JSON destination for Python builds. |
+| `FASHION_MATCHING_MODEL_ID`, `FASHION_MATCHING_MODEL_REVISION` | Primary visual encoder and revision. Pin an exact revision before production use. |
+| `FASHION_MATCHING_DEVICE`, `FASHION_MATCHING_BATCH_SIZE` | Inference device (`auto`, `cuda`, `mps`, or `cpu` as supported) and memory/throughput control. |
+| `FASHION_DINO_*` | DINO reranking, candidate count, item-type constraint, and model revision. |
+| `FASHION_PATTERN_*`, `FASHION_COLOUR_*` | Image-based acceptance gates used by the visual reranker. |
+| `FASHION_MINIMUM_SCORE` | Minimum acceptable visual score; defaults to `0.50`. |
+| `FASHION_APPEARANCE_*_WEIGHT` | Neural, colour, and texture blend weights; they must sum to `1`. |
+| `QDRANT_*`, `FASHION_COLLECTION_*` | Optional standalone Qdrant indexing and matching workflow. |
+| `ALLOWED_IMAGE_DOMAINS` | HTTPS allowlist for remote manifest images; local planner images do not need it. |
 
-### Tests and quality
+The Next.js image route uses `TURTLE_DATA_ROOT` too. Keep it consistent with
+the Python build location when running the frontend outside the repository
+root. The frontend calls no live API: it reads the generated artifact directly
+and serves product images from its own route handler.
 
-```bash
-make backend-test
-PYTHONPATH=backend/src .venv/bin/python -m ruff check backend/src backend/tests
-```
+## Run and test
 
-The tests cover the generated artifact contract, attribute similarity and the
-analogue-pooled demand pipeline.
+| Command | Result |
+|---|---|
+| `make frontend-dev` | Starts the planner at `http://localhost:3000`. |
+| `make frontend-build` | Creates an optimized Next.js production build. |
+| `make backend-test` | Runs Python tests. |
+| `make frontend-test` | Builds the frontend and runs its artifact contract test. |
+| `make test` | Runs both backend and frontend test suites. |
+| `make data` | Rebuilds the artifact without visual embeddings. |
+| `make data-vision` | Rebuilds the artifact with visual matching and verbose progress logging. |
+| `make fashion-index MANIFEST=...` | Builds and activates an optional Qdrant historical-image index. |
+| `make fashion-match MANIFEST=... OUTPUT=...` | Runs optional Qdrant manifest matching. |
+| `make fashion-evaluate RESULTS=... LABELS=...` | Evaluates retrieved results against reviewed relevance labels. |
 
-### Model boundaries
-
-**Machine learning** (`backend/src/machine_learning/`) owns explainable
-attribute similarity, analogue-pooled censoring-corrected predictive demand
-estimation, and newsvendor-solved order quantities against a planner
-sell-through target:
-
-- `model.py` — attribute similarity, analogue pooling and match confidence.
-- `demand.py` — the predictive demand estimator: a hierarchically shrunk
-  rate prior (group fit blended toward its parent by row count, no hard
-  cutoff), skew-corrected lognormal point estimates, and per-item-type buy
-  ceilings derived from each item type's own observed order/sales history
-  rather than one fixed constant.
-
-**Fashion matching** owns protected image fetching and validation,
-FashionCLIP-compatible inference and embedding generation, and candidate
-retrieval with DINO reranking and colour/pattern gating — see
-[FASHION_MATCHING.md](FASHION_MATCHING.md) for the full retrieval workflow.
-
-## Frontend
-
-The independent Next.js planner application. It reads
-`frontend/app/generated-data.json` — the artifact produced by the backend
-pipeline via `make data`/`make data-vision` — and does not import backend
-modules or call a backend API at runtime.
-
-```bash
-npm install
-npm run dev
-```
-
-Run these commands from `frontend/`, or use `make frontend-dev` from the
-repository root.
-
-Validation:
+Additional frontend checks, from `frontend/`:
 
 ```bash
 npm run lint
@@ -250,15 +280,45 @@ npx tsc --noEmit
 npm test
 ```
 
-The production data path is:
+Additional backend linting, from the repository root:
 
-```text
-XLSB ingestion → source validation → identifier/fabric cleaning
-→ canonical snake_case schema → processed CSV export
-→ feature engineering → ML training/validation → frontend artifact
+```bash
+PYTHONPATH=backend/src .venv/bin/python -m ruff check backend/src backend/tests
 ```
 
-The active AI evidence is limited to five business attributes: Item, Design,
-Colour, Category Type and Fabric. Season is retained only for tracing and
-temporal validation; historical outcomes remain prediction targets rather than
-similarity inputs.
+## Frontend behavior
+
+The planner has comparison and portfolio views. It lets a user inspect the
+selected upcoming style, the ranked historical visual evidence, uncertainty
+bands, sales expectation, and recommended initial order. Changing the minimum
+visual similarity or target sell-through recalculates the recommendation in the
+browser from the published demand-model data; it does not retrain the backend
+model.
+
+`frontend/app/generated-data.json` is a generated, versioned contract. Do not
+hand-edit it: rebuild it through the pipeline and keep the frontend contract
+test passing. Product images are delivered by
+`/product-images/{historical|upcoming}/{product-id}`, which only reads the two
+approved local image folders and sends safe image content types.
+
+## Optional standalone fashion retrieval
+
+The data-vision planner build uses local FAISS/NumPy retrieval and does not
+need Qdrant. Qdrant supports a separate, versioned catalogue-index workflow for
+experimentation or service-oriented use. It requires a Qdrant instance and a
+manifest; see [FASHION_MATCHING.md](FASHION_MATCHING.md) for manifest format,
+index activation, remote-image controls, evaluation labels, and rollback
+guidance.
+
+## Limitations and responsible use
+
+- The visual score threshold and reranker weights are provisional until they
+  are calibrated against time-separated, human-reviewed catalogue matches.
+- A visual analogue is evidence, not a guarantee of demand; sparse analogue
+  pools deliberately yield wider uncertainty.
+- The current artifact is a static snapshot. Rebuild after changing source
+  workbooks, images, model configuration, or operational assumptions.
+- Model downloads and visual inference may require substantial local disk,
+  memory, and time. Pin reviewed model revisions before production use.
+- Raw data, processed data, temporary conversions, model caches, and outputs
+  are excluded from Git to avoid committing commercial or large binary assets.

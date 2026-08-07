@@ -7,7 +7,6 @@ from PIL import Image
 
 from fashion_matching.appearance import (
     OTTR_TROUSER_ROI,
-    cosine_distance,
     delta_e_ciede2000,
     dominant_palette_distance,
     extract_appearance_features,
