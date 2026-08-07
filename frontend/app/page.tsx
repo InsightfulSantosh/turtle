@@ -184,6 +184,17 @@ function scorePercent(value: number | null) {
   return value === null ? "N/A" : `${Math.round(value * 100)}%`;
 }
 
+function sellThroughTradeoff(target: number): string {
+  const percent = Math.round(target * 100);
+  if (target <= 0.5) {
+    return `A ${percent}% sell-through target favors a larger opening order to capture more demand, with higher leftover-stock risk.`;
+  }
+  if (target >= 0.75) {
+    return `A ${percent}% sell-through target favors a smaller opening order and lower leftover-stock risk, with a greater chance of missed sales.`;
+  }
+  return `A ${percent}% sell-through target balances capturing demand with limiting leftover stock.`;
+}
+
 // Fallback only, for callers with no data-derived ceiling available (the
 // legacy-formula edge case before any artifact ever carried buyCeilings).
 // The live predictive path uses a per-item-type ceiling from
@@ -1060,35 +1071,26 @@ function App() {
                 </div>
                 <div className="rationale-box">
                   <span className="rationale-icon">✦</span>
-                  <p>
-                    {decision.noSuitableMatch ? (
-                      <>
-                        No historical product cleared the visual-match threshold. No sales or order quantity is generated; planner review is required.
-                      </>
-                    ) : (
-                      decision.forecast ? (
+                  <div className="rationale-copy">
+                    <strong>Why this recommendation</strong>
+                    <p>
+                      {decision.noSuitableMatch ? (
                         <>
-                          {/* Demand, deliberately unclipped: the sales figure above is
-                              what this order can deliver, and this is the market it is
-                              being judged against. The labels must keep them apart. */}
-                          Forecast demand: <b>{numberFormatter.format(headlineDemand(decision))} units</b> ({numberFormatter.format(decision.salesLow)}–{numberFormatter.format(decision.salesHigh)}, {decision.forecast.analoguesUsed} {decision.forecast.analoguesUsed === 1 ? "analogue" : "analogues"}).{decision.forecast.wideUncertainty ? " Evidence is thin, so treat the range as the estimate." : ""}{" "}
-                          {decision.quantityCapped ? (
-                            <>
-                              Capped at the {selected.itemType} maximum order of <b>{numberFormatter.format(decision.buyCeiling)} units</b>.
-                            </>
-                          ) : (
-                            <>
-                              Order <b>{numberFormatter.format(decision.quantity)} units</b> for <b>{Math.round(targetSellThrough * 100)}% sell-through</b>.
-                            </>
-                          )}
+                          No historical product cleared the visual-match threshold. No sales or order quantity is generated; planner review is required.
+                        </>
+                      ) : decision.forecast ? (
+                        <>
+                          {sellThroughTradeoff(targetSellThrough)}
+                          {decision.forecast.wideUncertainty && " Historical evidence is limited, so use the likely sales range above rather than treating the point forecast as certain."}
+                          {decision.quantityCapped && " The maximum-order policy is binding, so the selected sell-through target may not be achieved."}
                         </>
                       ) : (
                         <>
-                          Matched product sold <b>{numberFormatter.format(decision.expectedSales)} units</b>. At <b>{Math.round(targetSellThrough * 100)}% target sell-through</b>, order <b>{numberFormatter.format(decision.quantity)} units</b>.
+                          This rule-based order scales the selected past product&apos;s observed sales to the chosen sell-through target. Review the historical match before approval.
                         </>
-                      )
-                    )}
-                  </p>
+                      )}
+                    </p>
+                  </div>
                 </div>
                 <div className="recommendation-metrics">
                   <div className="analogue-tile">

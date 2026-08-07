@@ -1110,9 +1110,21 @@ select {
   width: 16px;
 }
 
+.rationale-copy {
+  min-width: 0;
+}
+
+.rationale-copy > strong {
+  color: var(--forest);
+  display: block;
+  font-size: 8px;
+  line-height: 1.25;
+  margin-bottom: 2px;
+}
+
 .rationale-box p {
   color: var(--ink-soft);
-  font-size: 9px;
+  font-size: 8px;
   line-height: 1.4;
   margin: 0;
 }
@@ -1872,18 +1884,19 @@ select {
   text-transform: uppercase;
 }
 
-/* The card's only elastic block. The zero flex-basis is what keeps the card a
-   fixed height: intrinsic sizing then counts only this panel's min-height, not
-   its content, so a rationale that wraps to an extra line can no longer push
-   the whole decision row taller. In layout it grows into whatever space is
-   left over and scrolls internally if its content does not fit. */
+/* A compact fixed panel keeps catalogue values from changing the decision
+   card's height. Values stay on one line and expose their full text through
+   the existing tooltip, so this panel never needs its own scrollbar. */
 .workbook-audit-panel {
   background: var(--tile-bg);
   border: 1px solid var(--line-dark);
   border-radius: 14px;
-  flex: 1 1 0;
-  min-height: 72px;
-  overflow-y: auto;
+  display: flex;
+  flex: 0 0 116px;
+  flex-direction: column;
+  height: 116px;
+  min-height: 0;
+  overflow: hidden;
   padding: 10px;
 }
 
@@ -1892,7 +1905,7 @@ select {
   display: flex;
   gap: 8px;
   justify-content: space-between;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
 
 .workbook-audit-heading > div:first-child {
@@ -1901,7 +1914,7 @@ select {
 
 .workbook-audit-heading span:first-child {
   color: var(--ink);
-  font-size: 9px;
+  font-size: 8px;
   font-weight: 900;
 }
 
@@ -1916,13 +1929,13 @@ select {
 
 .workbook-audit-heading .analogue-count-chip {
   flex: 0 0 auto;
-  font-size: 6px;
-  padding: 4px 7px;
+  font-size: 5.5px;
+  padding: 3px 6px;
 }
 
 .attribute-evidence {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
@@ -1939,33 +1952,36 @@ select {
 .attribute-comparison {
   background: rgba(255, 255, 255, 0.76);
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
   box-shadow: 0 4px 14px rgba(25, 54, 43, 0.035);
   min-width: 0;
-  padding: 5px;
+  padding: 4px;
 }
 
 .attribute-comparison-heading {
   align-items: center;
   display: flex;
-  gap: 8px;
+  gap: 4px;
   justify-content: space-between;
 }
 
 .attribute-comparison-heading > span {
   color: var(--ink-soft);
-  font-size: 7px;
+  font-size: 6px;
   font-weight: 900;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .attribute-match-status {
   align-items: center;
   border-radius: 999px;
   display: flex;
-  font-size: 6px;
+  font-size: 5.5px;
   font-weight: 900;
   gap: 4px;
-  padding: 2px 5px;
+  padding: 1px 4px;
 }
 
 .attribute-match-status.exact {
@@ -1983,16 +1999,18 @@ select {
   display: grid;
   gap: 4px;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
-  margin-top: 5px;
+  margin-top: 3px;
 }
 
 .attribute-value-pair > span {
   color: var(--ink);
-  font-size: 7.5px;
+  font-size: 6.5px;
   font-weight: 700;
   line-height: 1.2;
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .attribute-evidence-legend {

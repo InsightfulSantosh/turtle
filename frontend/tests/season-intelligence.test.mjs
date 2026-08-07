@@ -163,6 +163,9 @@ test("keeps the pooled predictive forecast contract intact", async () => {
   assert.match(pageSource, /const eligible = ranked\.filter/);
   assert.match(pageSource, /function newsvendorOrder/);
   assert.match(pageSource, /function forecastDemand/);
+  assert.match(pageSource, /Why this recommendation/);
+  assert.match(pageSource, /sellThroughTradeoff/);
+  assert.doesNotMatch(pageSource, /Forecast demand: <b>/);
   assert.match(pageSource, /wideUncertainty/);
   assert.match(pageSource, /medianDemand/);
   assert.match(pageSource, /quantityCapped/);
