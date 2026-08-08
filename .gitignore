@@ -39,7 +39,6 @@ next-env.d.ts
 **/__pycache__/
 *.egg-info/
 /DATA/
-/outputs/
 /tmp/
 /models/
 /.model-cache/

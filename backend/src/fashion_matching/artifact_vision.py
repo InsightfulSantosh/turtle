@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,7 +14,6 @@ from typing import Any
 import numpy as np
 
 from data_pipeline.images import build_image_index
-from data_pipeline.settings import PipelineSettings
 from fashion_matching.appearance import (
     COLOUR_DELTA_E_SCALE,
     COLOUR_DESCRIPTOR_DIMENSION,
@@ -28,10 +30,17 @@ from fashion_matching.appearance import (
     requires_pattern_gate,
 )
 from fashion_matching.encoders import FashionEncoder, ImageEncoder
-from fashion_matching.models import ManifestRecord
 from fashion_matching.preprocessing import ImagePreprocessor, ImageValidationError
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class VisionPaths:
+    """The two image directories a build encodes, historical first."""
+
+    historical_image_root: Path
+    upcoming_image_root: Path
 
 
 @dataclass(frozen=True)
@@ -44,6 +53,82 @@ class CatalogueVisualEmbeddings:
     texture: np.ndarray
     colour_available: list[bool]
     texture_available: list[bool]
+    cache_keys: list[str]
+
+
+def save_catalogue_embeddings(
+    path: Path,
+    embeddings: CatalogueVisualEmbeddings,
+    *,
+    model_id: str,
+    model_revision: str,
+    reranker_model_id: str | None,
+    reranker_model_revision: str | None,
+    preprocessing_version: str,
+) -> None:
+    """Persist validated historical features for upcoming-only rebuilds."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    metadata = {
+        "modelId": model_id,
+        "modelRevision": model_revision,
+        "rerankerModelId": reranker_model_id,
+        "rerankerModelRevision": reranker_model_revision,
+        "preprocessingVersion": preprocessing_version,
+    }
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("wb") as handle:
+        np.savez_compressed(
+            handle,
+            identifiers=np.asarray(embeddings.identifiers, dtype=np.str_),
+            fashion=embeddings.fashion,
+            detail=embeddings.detail if embeddings.detail is not None else np.empty((0, 0), dtype=np.float32),
+            pattern=embeddings.pattern if embeddings.pattern is not None else np.empty((0, 0), dtype=np.float32),
+            colour=embeddings.colour,
+            texture=embeddings.texture,
+            colour_available=np.asarray(embeddings.colour_available, dtype=np.bool_),
+            texture_available=np.asarray(embeddings.texture_available, dtype=np.bool_),
+            cache_keys=np.asarray(embeddings.cache_keys, dtype=np.str_),
+            metadata=np.asarray([json.dumps(metadata, separators=(",", ":"))], dtype=np.str_),
+        )
+    temporary.replace(path)
+
+
+def load_catalogue_embeddings(
+    path: Path,
+    *,
+    model_id: str,
+    model_revision: str,
+    reranker_model_id: str | None,
+    reranker_model_revision: str | None,
+    preprocessing_version: str,
+) -> CatalogueVisualEmbeddings:
+    """Load historical features only when model and preprocessing keys match."""
+
+    with np.load(path, allow_pickle=False) as stored:
+        metadata = json.loads(str(stored["metadata"][0]))
+        expected = {
+            "modelId": model_id,
+            "modelRevision": model_revision,
+            "rerankerModelId": reranker_model_id,
+            "rerankerModelRevision": reranker_model_revision,
+            "preprocessingVersion": preprocessing_version,
+        }
+        if metadata != expected:
+            raise ValueError("stored historical features use a different model or preprocessing version")
+        detail = np.asarray(stored["detail"], dtype=np.float32)
+        pattern = np.asarray(stored["pattern"], dtype=np.float32)
+        return CatalogueVisualEmbeddings(
+            identifiers=[str(value) for value in stored["identifiers"].tolist()],
+            fashion=np.asarray(stored["fashion"], dtype=np.float32),
+            detail=detail if detail.size else None,
+            pattern=pattern if pattern.size else None,
+            colour=np.asarray(stored["colour"], dtype=np.float32),
+            texture=np.asarray(stored["texture"], dtype=np.float32),
+            colour_available=[bool(value) for value in stored["colour_available"].tolist()],
+            texture_available=[bool(value) for value in stored["texture_available"].tolist()],
+            cache_keys=[str(value) for value in stored["cache_keys"].tolist()],
+        )
 
 
 def _encode_catalog(
@@ -55,6 +140,9 @@ def _encode_catalog(
     reranker: ImageEncoder | None,
     preprocessor: ImagePreprocessor,
     batch_size: int,
+    feature_cache_root: Path | None = None,
+    catalog_name: str = "catalog",
+    progress_callback: Callable[[dict[str, int | float | str]], None] | None = None,
 ) -> CatalogueVisualEmbeddings:
     """Encode each usable catalogue image once for every enabled visual stage."""
 
@@ -70,10 +158,44 @@ def _encode_catalog(
     total_paths = len(paths)
     started_at = time.monotonic()
     encoded_count = 0
+    cached_count = 0
     skipped_count = 0
+
+    def report_progress(processed_count: int) -> None:
+        elapsed_seconds = max(time.monotonic() - started_at, 1e-9)
+        processing_rate = processed_count / elapsed_seconds
+        eta_seconds = (total_paths - processed_count) / processing_rate if processing_rate else 0.0
+        LOGGER.info(
+            (
+                "Vision progress catalog=%s processed=%s total=%s percent=%.1f%% "
+                "encoded=%s cached=%s skipped=%s elapsed=%.1fmin eta=%.1fmin"
+            ),
+            catalog_name,
+            processed_count,
+            total_paths,
+            (processed_count / total_paths * 100.0) if total_paths else 100.0,
+            encoded_count,
+            cached_count,
+            skipped_count,
+            elapsed_seconds / 60.0,
+            eta_seconds / 60.0,
+        )
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "catalog": catalog_name,
+                    "processed": processed_count,
+                    "total": total_paths,
+                    "encoded": encoded_count,
+                    "cached": cached_count,
+                    "skipped": skipped_count,
+                    "rate": processing_rate,
+                    "etaSeconds": eta_seconds,
+                }
+            )
     LOGGER.info(
         "Vision encoding started catalog=%s total=%s batch_size=%s",
-        image_root.name,
+        catalog_name,
         total_paths,
         batch_size,
     )
@@ -82,19 +204,15 @@ def _encode_catalog(
     pattern_vectors_by_path: dict[Path, np.ndarray] = {}
     colour_vectors_by_path: dict[Path, np.ndarray] = {}
     texture_vectors_by_path: dict[Path, np.ndarray] = {}
+    cache_keys_by_path: dict[Path, str] = {}
     for offset in range(0, len(paths), batch_size):
         batch_paths = paths[offset : offset + batch_size]
         prepared_paths: list[Path] = []
         prepared_images = []
+        cache_paths: list[Path | None] = []
         for image_path in batch_paths:
             try:
-                prepared = preprocessor.prepare(
-                    ManifestRecord(
-                        product_id=image_path.stem,
-                        image_id=image_path.stem,
-                        image_path=image_path,
-                    )
-                )
+                prepared = preprocessor.prepare(image_path)
             except ImageValidationError as exc:
                 skipped_count += 1
                 LOGGER.warning("Skipping invalid product image %s: %s", image_path, exc)
@@ -109,16 +227,50 @@ def _encode_catalog(
                     f"Image {image_path} is mapped to multiple item types: {sorted(item_types)}"
                 )
             item_type = next(iter(item_types), "")
+            cache_path: Path | None = None
+            if feature_cache_root is not None:
+                cache_key = hashlib.sha256(
+                    "\n".join(
+                        (
+                            prepared.checksum,
+                            item_type,
+                            encoder.model_id,
+                            encoder.revision,
+                            reranker.model_id if reranker is not None else "",
+                            reranker.revision if reranker is not None else "",
+                            preprocessor.version,
+                        )
+                    ).encode("utf-8")
+                ).hexdigest()
+                cache_path = feature_cache_root / cache_key[:2] / f"{cache_key}.npz"
+                cache_keys_by_path[image_path] = cache_key
+                if cache_path.is_file():
+                    try:
+                        with np.load(cache_path, allow_pickle=False) as cached:
+                            fashion_vectors_by_path[image_path] = np.asarray(cached["fashion"], dtype=np.float32)
+                            colour_vectors_by_path[image_path] = np.asarray(cached["colour"], dtype=np.float32)
+                            texture_vectors_by_path[image_path] = np.asarray(cached["texture"], dtype=np.float32)
+                            if reranker is not None:
+                                detail_vectors_by_path[image_path] = np.asarray(cached["detail"], dtype=np.float32)
+                                pattern_vectors_by_path[image_path] = np.asarray(cached["pattern"], dtype=np.float32)
+                        cached_count += 1
+                        prepared.image.close()
+                        continue
+                    except (OSError, KeyError, ValueError):
+                        cache_path.unlink(missing_ok=True)
             appearance = extract_pipeline_appearance_features(
                 prepared.image,
                 item_type=item_type,
             )
             prepared_paths.append(image_path)
             prepared_images.append(appearance.image)
+            cache_paths.append(cache_path)
             colour_vectors_by_path[image_path] = appearance.colour_vector
             texture_vectors_by_path[image_path] = appearance.texture_vector
 
+        processed_count = min(offset + len(batch_paths), total_paths)
         if not prepared_images:
+            report_progress(processed_count)
             continue
         try:
             fashion_vectors = encoder.encode_images(prepared_images)
@@ -154,31 +306,37 @@ def _encode_catalog(
                 detail_vectors_by_path[image_path] = np.asarray(detail_vectors[index], dtype=np.float32)
                 combined = np.concatenate(pattern_vectors[index * 3 : (index + 1) * 3]).astype(np.float32)
                 pattern_vectors_by_path[image_path] = combined / max(float(np.linalg.norm(combined)), 1e-12)
+            cache_path = cache_paths[index]
+            if cache_path is not None:
+                cache_path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = cache_path.with_suffix(cache_path.suffix + ".tmp")
+                with temporary.open("wb") as handle:
+                    np.savez_compressed(
+                        handle,
+                        fashion=fashion_vectors_by_path[image_path],
+                        detail=(
+                            detail_vectors_by_path[image_path]
+                            if reranker is not None
+                            else np.empty((0,), dtype=np.float32)
+                        ),
+                        pattern=(
+                            pattern_vectors_by_path[image_path]
+                            if reranker is not None
+                            else np.empty((0,), dtype=np.float32)
+                        ),
+                        colour=colour_vectors_by_path[image_path],
+                        texture=texture_vectors_by_path[image_path],
+                    )
+                temporary.replace(cache_path)
         encoded_count += len(prepared_paths)
-        processed_count = min(offset + len(batch_paths), total_paths)
-        elapsed_seconds = max(time.monotonic() - started_at, 1e-9)
-        processing_rate = processed_count / elapsed_seconds
-        eta_seconds = (total_paths - processed_count) / processing_rate if processing_rate else 0.0
-        LOGGER.info(
-            (
-                "Vision progress catalog=%s processed=%s total=%s percent=%.1f%% "
-                "encoded=%s skipped=%s elapsed=%.1fmin eta=%.1fmin"
-            ),
-            image_root.name,
-            processed_count,
-            total_paths,
-            (processed_count / total_paths * 100.0) if total_paths else 100.0,
-            encoded_count,
-            skipped_count,
-            elapsed_seconds / 60.0,
-            eta_seconds / 60.0,
-        )
+        report_progress(processed_count)
 
     LOGGER.info(
-        "Vision encoding completed catalog=%s total=%s encoded=%s skipped=%s elapsed=%.1fmin",
-        image_root.name,
+        "Vision encoding completed catalog=%s total=%s encoded=%s cached=%s skipped=%s elapsed=%.1fmin",
+        catalog_name,
         total_paths,
         encoded_count,
+        cached_count,
         skipped_count,
         (time.monotonic() - started_at) / 60.0,
     )
@@ -191,6 +349,7 @@ def _encode_catalog(
     texture_vectors: list[np.ndarray] = []
     colour_available: list[bool] = []
     texture_available: list[bool] = []
+    cache_keys: list[str] = []
     for image_path, catalog_items in path_to_items.items():
         fashion_vector = fashion_vectors_by_path.get(image_path)
         detail_vector = detail_vectors_by_path.get(image_path) if reranker else None
@@ -206,6 +365,7 @@ def _encode_catalog(
             fashion_vectors.append(fashion_vector)
             colour_available.append(True)
             texture_available.append(True)
+            cache_keys.append(cache_keys_by_path.get(image_path, ""))
             colour_vectors.append(colour_vector)
             texture_vectors.append(texture_vector)
             if detail_vector is not None:
@@ -227,6 +387,7 @@ def _encode_catalog(
             texture=np.empty((0, TEXTURE_DESCRIPTOR_DIMENSION), dtype=np.float32),
             colour_available=[],
             texture_available=[],
+            cache_keys=[],
         )
     return CatalogueVisualEmbeddings(
         identifiers=identifiers,
@@ -237,6 +398,7 @@ def _encode_catalog(
         texture=np.stack(texture_vectors),
         colour_available=colour_available,
         texture_available=texture_available,
+        cache_keys=cache_keys,
     )
 
 
@@ -427,7 +589,7 @@ def _two_stage_candidate_rows(
 def build_artifact_vision_output(
     source: dict[str, Any],
     *,
-    settings: PipelineSettings,
+    settings: VisionPaths,
     encoder: FashionEncoder,
     preprocessor: ImagePreprocessor,
     reranker: ImageEncoder | None = None,
@@ -442,6 +604,10 @@ def build_artifact_vision_output(
     colour_max_distance: float = 0.20,
     appearance_weights: dict[str, float] | None = None,
     batch_size: int = 16,
+    historical_embeddings: CatalogueVisualEmbeddings | None = None,
+    historical_embeddings_callback: Callable[[CatalogueVisualEmbeddings], None] | None = None,
+    feature_cache_root: Path | None = None,
+    progress_callback: Callable[[dict[str, int | float | str]], None] | None = None,
 ) -> dict[str, Any]:
     """Build either legacy visual distances or two-stage retrieval candidates."""
 
@@ -466,15 +632,26 @@ def build_artifact_vision_output(
         1.0,
     ):
         raise ValueError("appearance_weights must be non-negative and sum to 1")
-    historical = _encode_catalog(
-        source["historical"],
-        image_root=settings.historical_image_root,
-        identifier_field="sourceId",
-        encoder=encoder,
-        reranker=reranker,
-        preprocessor=preprocessor,
-        batch_size=batch_size,
-    )
+    historical = historical_embeddings
+    if historical is None:
+        historical = _encode_catalog(
+            source["historical"],
+            image_root=settings.historical_image_root,
+            identifier_field="sourceId",
+            encoder=encoder,
+            reranker=reranker,
+            preprocessor=preprocessor,
+            batch_size=batch_size,
+            feature_cache_root=feature_cache_root,
+            catalog_name="historical",
+            progress_callback=progress_callback,
+        )
+        if historical_embeddings_callback is not None:
+            historical_embeddings_callback(historical)
+    else:
+        reusable_ids = set(historical.identifiers)
+        for item in source["historical"]:
+            item["hasVisualFeature"] = str(item["id"]) in reusable_ids
     upcoming = _encode_catalog(
         source["upcoming"],
         image_root=settings.upcoming_image_root,
@@ -483,7 +660,11 @@ def build_artifact_vision_output(
         reranker=reranker,
         preprocessor=preprocessor,
         batch_size=batch_size,
+        feature_cache_root=feature_cache_root,
+        catalog_name="upcoming",
+        progress_callback=progress_callback,
     )
+    feature_cache_keys = sorted({key for key in (*historical.cache_keys, *upcoming.cache_keys) if key})
     if reranker is None:
         distances = _distance_rows(
             historical.identifiers,
@@ -512,6 +693,7 @@ def build_artifact_vision_output(
                 "and upcoming-to-historical serving distances"
             ),
             "distances": distances,
+            "featureCacheKeys": feature_cache_keys,
         }
 
     assert historical.detail is not None
@@ -682,4 +864,5 @@ def build_artifact_vision_output(
             "CIEDE2000 colour and texture candidate distances; component weights are configured explicitly"
         ),
         "candidatePairs": candidate_pairs,
+        "featureCacheKeys": feature_cache_keys,
     }

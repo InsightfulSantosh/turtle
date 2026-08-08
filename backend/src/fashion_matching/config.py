@@ -4,7 +4,7 @@ import math
 import os
 from dataclasses import dataclass
 
-from fashion_matching.scoring import SignalWeights
+MAXIMUM_CANDIDATE_COUNT = 10_000
 
 
 def _as_bool(name: str, default: bool) -> bool:
@@ -30,9 +30,6 @@ class MatchingSettings:
     model_revision: str = "main"
     device: str = "auto"
     batch_size: int = 16
-    candidate_count: int = 100
-    top_k: int = 5
-    minimum_score: float | None = 0.50
     preprocessing_version: str = "rgb-exif-pad-v1"
     max_image_bytes: int = 16 * 1024 * 1024
     max_image_pixels: int = 40_000_000
@@ -53,28 +50,12 @@ class MatchingSettings:
     appearance_neural_weight: float = 0.45
     appearance_colour_weight: float = 0.45
     appearance_texture_weight: float = 0.10
-    qdrant_url: str = "http://localhost:6333"
-    qdrant_api_key: str | None = None
-    collection_prefix: str = "turtle-fashion"
-    collection_alias: str = "turtle-fashion-active"
-    allowed_image_domains: tuple[str, ...] = ()
-    weights: SignalWeights = SignalWeights(
-        image=1.00,
-        attributes=0.00,
-        text=0.00,
-    )
 
     def __post_init__(self) -> None:
         if not 1 <= self.batch_size <= 256:
             raise ValueError("batch_size must be between 1 and 256")
-        if not 1 <= self.candidate_count <= 10_000:
-            raise ValueError("candidate_count must be between 1 and 10000")
-        if not 1 <= self.top_k <= self.candidate_count:
-            raise ValueError("top_k must be positive and no larger than candidate_count")
-        if self.minimum_score is not None and not 0 <= self.minimum_score <= 1:
-            raise ValueError("minimum_score must be between 0 and 1")
-        if not 1 <= self.dino_candidate_count <= self.candidate_count:
-            raise ValueError("dino_candidate_count must be between 1 and candidate_count")
+        if not 1 <= self.dino_candidate_count <= MAXIMUM_CANDIDATE_COUNT:
+            raise ValueError(f"dino_candidate_count must be between 1 and {MAXIMUM_CANDIDATE_COUNT}")
         if not self.dino_weight_grid or any(not 0 <= weight <= 1 for weight in self.dino_weight_grid):
             raise ValueError("dino_weight_grid values must be between 0 and 1")
         if not 0 <= self.pattern_max_distance <= 2:
@@ -96,10 +77,6 @@ class MatchingSettings:
 
     @classmethod
     def from_environment(cls) -> MatchingSettings:
-        threshold = os.getenv("FASHION_MINIMUM_SCORE")
-        domains = tuple(
-            part.strip().lower() for part in os.getenv("ALLOWED_IMAGE_DOMAINS", "").split(",") if part.strip()
-        )
         return cls(
             model_id=os.getenv(
                 "FASHION_MATCHING_MODEL_ID",
@@ -108,9 +85,6 @@ class MatchingSettings:
             model_revision=os.getenv("FASHION_MATCHING_MODEL_REVISION", "main"),
             device=os.getenv("FASHION_MATCHING_DEVICE", "auto"),
             batch_size=int(os.getenv("FASHION_MATCHING_BATCH_SIZE", "16")),
-            candidate_count=int(os.getenv("FASHION_MATCHING_CANDIDATE_COUNT", "100")),
-            top_k=int(os.getenv("FASHION_MATCHING_TOP_K", "5")),
-            minimum_score=float(threshold) if threshold else 0.50,
             preprocessing_version=os.getenv(
                 "FASHION_PREPROCESSING_VERSION",
                 "rgb-exif-pad-v1",
@@ -143,20 +117,4 @@ class MatchingSettings:
             appearance_neural_weight=float(os.getenv("FASHION_APPEARANCE_NEURAL_WEIGHT", "0.45")),
             appearance_colour_weight=float(os.getenv("FASHION_APPEARANCE_COLOUR_WEIGHT", "0.45")),
             appearance_texture_weight=float(os.getenv("FASHION_APPEARANCE_TEXTURE_WEIGHT", "0.10")),
-            qdrant_url=os.getenv("QDRANT_URL", "http://localhost:6333"),
-            qdrant_api_key=os.getenv("QDRANT_API_KEY"),
-            collection_prefix=os.getenv(
-                "FASHION_COLLECTION_PREFIX",
-                "turtle-fashion",
-            ),
-            collection_alias=os.getenv(
-                "FASHION_COLLECTION_ALIAS",
-                "turtle-fashion-active",
-            ),
-            allowed_image_domains=domains,
-            weights=SignalWeights(
-                image=float(os.getenv("FASHION_IMAGE_WEIGHT", "1.00")),
-                attributes=float(os.getenv("FASHION_ATTRIBUTE_WEIGHT", "0.00")),
-                text=float(os.getenv("FASHION_TEXT_WEIGHT", "0.00")),
-            ),
         )

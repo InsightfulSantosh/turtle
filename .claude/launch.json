@@ -7,6 +7,13 @@
       "runtimeArgs": ["--prefix", "frontend", "run", "dev"],
       "port": 3000,
       "autoPort": true
+    },
+    {
+      "name": "turtle-frontend-prod",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "frontend", "run", "start"],
+      "port": 3001,
+      "autoPort": true
     }
   ]
 }

@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import hashlib
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 from PIL import Image
 
-from fashion_matching.scoring import l2_normalize
-
 
 class EncoderError(RuntimeError):
     """Raised when a configured embedding model cannot produce valid vectors."""
+
+
+def l2_normalize(vector: list[float]) -> list[float]:
+    norm = math.sqrt(sum(value * value for value in vector))
+    if not math.isfinite(norm) or norm <= 0:
+        raise ValueError("embedding must have a finite, non-zero L2 norm")
+    return [float(value / norm) for value in vector]
 
 
 class ImageEncoder(Protocol):

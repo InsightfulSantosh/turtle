@@ -24,8 +24,6 @@ def _environment_path(name: str, default: Path) -> Path:
 class ProjectPaths:
     repository: Path
     data: Path
-    temporary: Path
-    model_artifact: Path
 
 
 REPOSITORY_ROOT = _repository_root()
@@ -33,9 +31,4 @@ REPOSITORY_ROOT = _repository_root()
 paths = ProjectPaths(
     repository=REPOSITORY_ROOT,
     data=_environment_path("TURTLE_DATA_ROOT", REPOSITORY_ROOT / "DATA"),
-    temporary=_environment_path("TURTLE_TEMP_ROOT", REPOSITORY_ROOT / "tmp"),
-    model_artifact=_environment_path(
-        "TURTLE_MODEL_ARTIFACT",
-        REPOSITORY_ROOT / "frontend" / "app" / "generated-data.json",
-    ),
 )

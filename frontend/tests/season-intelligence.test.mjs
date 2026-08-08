@@ -1,160 +1,22 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
 import test from "node:test";
 
-const artifactUrl = new URL("../app/generated-data.json", import.meta.url);
 const pageUrl = new URL("../app/page.tsx", import.meta.url);
+const cssUrl = new URL("../app/globals.css", import.meta.url);
+const nextConfigUrl = new URL("../next.config.ts", import.meta.url);
+
+async function exists(url) {
+  try {
+    await access(url);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 test("keeps the pooled predictive forecast contract intact", async () => {
-  const [artifactText, pageSource] = await Promise.all([
-    readFile(artifactUrl, "utf8"),
-    readFile(pageUrl, "utf8"),
-  ]);
-  const artifact = JSON.parse(artifactText);
-  const expectedUpcoming = artifact.meta.previewSample ? 200 : 5550;
-  const model = artifact.meta.model;
-  const reranker = artifact.meta.visionModel.reranker;
-
-  assert.equal(model.version, "5.1.0");
-  assert.equal(model.evidencePolicy, "pooled_visual_analogue_forecast");
-  assert.equal(model.noMachineLearningForecast, false);
-  assert.equal(model.noAttributeMatching, true);
-  assert.equal(model.visualOnlyRanking, true);
-  assert.equal(model.topK, 4);
-  assert.equal(model.targetSellThrough, 0.70);
-  assert.equal(model.minimumVisualScore, 0.5);
-  assert.ok(!("demandLibrary" in model));
-  assert.ok(!("demandPipeline" in model));
-  assert.ok(!("regressionBlend" in model));
-  assert.ok(!("attributeWeight" in model));
-  assert.ok(!("backtest" in model));
-
-  assert.equal(reranker.sameItemTypeConstraint, true);
-  assert.equal(reranker.sameDesignConstraint, false);
-  assert.ok(!("sameColourFamilyConstraint" in reranker));
-  assert.equal(reranker.patternGate.enabled, true);
-  assert.deepEqual(
-    reranker.appearance.itemTypeOverrides.OTTR.relativeBox,
-    [0.16, 0.28, 0.84, 0.8],
-  );
-  assert.equal(artifact.upcoming.length, expectedUpcoming);
-  assert.equal(artifact.meta.historicalImageCoverage, 508);
-  assert.equal(artifact.meta.upcomingImageCoverage, expectedUpcoming);
-
-  // The estimator must ship the fitted priors and per-product rates, because
-  // the frontend repools the forecast whenever a planner moves a slider.
-  assert.ok(model.demandModel, "artifact must publish the fitted demand model");
-  assert.ok(model.demandModel.horizonWeeks > 0);
-  assert.ok(model.demandModel.shrinkageTau > 0);
-  assert.ok(model.demandModel.wideUncertaintyEffectiveN > 0);
-  assert.ok(model.demandModel.wideUncertaintySkewRatio > 1);
-  assert.ok(Object.keys(model.demandModel.groups).length > 1);
-  assert.ok(model.demandModel.groups[""], "a global prior must always exist");
-  assert.ok(
-    artifact.historical.filter((item) => typeof item.weeklyLogRate === "number").length > 0,
-    "historical products must carry a corrected weekly demand rate",
-  );
-  // A handful of source rows genuinely record no ageing and fall back to the
-  // assumed window. Near-total coverage is what distinguishes a properly built
-  // artifact from a pre-migration one where the fallback applied to everything.
-  const withExposure = artifact.historical.filter((item) => item.ageingDays > 0).length;
-  assert.ok(
-    withExposure / artifact.historical.length > 0.95,
-    `only ${withExposure}/${artifact.historical.length} products carry exposure data`,
-  );
-
-  const historyById = new Map(artifact.historical.map((item) => [item.id, item]));
-  assert.ok(artifact.upcoming.every(({ matches }) => matches.length <= 4));
-  assert.ok(artifact.upcoming.every(({ matches }) => matches.every((match) => (
-    !("attributeScore" in match) && !("attributeBreakdown" in match)
-  ))));
-
-  const recommended = artifact.upcoming.filter(({ recommendation }) => !recommendation.noSuitableMatch);
-  assert.ok(recommended.length > 0);
-  assert.ok(artifact.upcoming.every(({ recommendation, matches }) => {
-    if (recommendation.noSuitableMatch) {
-      return recommendation.quantity === 0
-        && recommendation.expectedSales === 0
-        && !("demand" in recommendation);
-    }
-    return Math.round(matches[0].visualScore * 100) >= Math.round(model.minimumVisualScore * 100)
-      && recommendation.evidencePolicy === "pooled_visual_analogue_forecast"
-      && recommendation.demand.analoguesUsed >= 1
-      // A forecast has a distribution; a lookup has one value. The bands are
-      // strict unless the 2,000-unit buy cap clamps the upper end.
-      && recommendation.salesLow < recommendation.salesHigh
-      && recommendation.low < recommendation.high
-      && recommendation.salesLow <= recommendation.expectedSales
-      && recommendation.expectedSales <= recommendation.salesHigh
-      && recommendation.low <= recommendation.quantity
-      && recommendation.quantity <= recommendation.high;
-  }));
-
-  // The reported defect: the forecast was the analogue's own sales republished
-  // under a second name, for every single product.
-  const copies = recommended.filter(
-    ({ recommendation }) => recommendation.expectedSales === recommendation.analogueSales,
-  );
-  assert.ok(
-    copies.length / recommended.length < 0.25,
-    `forecast still copies the analogue for ${copies.length}/${recommended.length} products`,
-  );
-  // analogueSales is an observed historical fact, not a forecast — it must
-  // never be capped, even for the catalogue's biggest historical sellers.
-  assert.ok(recommended.every(({ matches, recommendation }) => {
-    const historical = historyById.get(matches[0].historicalId);
-    return recommendation.analogueSales === Math.round(historical.salesTarget / 25) * 25;
-  }), "analogue sales must still report the selected analogue's own cleaned sales, uncapped");
-
-  // mean (expectedSales) vs median: the reported "775 forecast next to a 300
-  // order looks like a bug" case. medianDemand must always be present and,
-  // for at least one real product, meaningfully below the mean — proving the
-  // skew this exists to explain actually occurs in the shipped artifact, not
-  // just in a synthetic test.
-  assert.ok(recommended.every(({ recommendation }) => (
-    typeof recommendation.demand.medianDemand === "number"
-    && recommendation.demand.medianDemand <= recommendation.expectedSales
-    && recommendation.demand.skewRatio >= 1
-    && typeof recommendation.demand.wideUncertainty === "boolean"
-  )));
-  const flagged = recommended.filter(({ recommendation }) => recommendation.demand.wideUncertainty);
-  assert.ok(flagged.length > 0, "no product exercised the wide-uncertainty path in this artifact");
-  assert.ok(flagged.every(({ recommendation }) => (
-    recommendation.demand.medianDemand < recommendation.expectedSales
-    // Both can saturate at that item type's buy ceiling and round to the
-    // same displayed value even though the underlying median is genuinely
-    // lower — the ceiling is now per item type, not a flat 2,000.
-    || recommendation.expectedSales >= recommendation.buyCeiling
-  )), "wideUncertainty must correspond to the mean actually sitting above the median");
-
-  // Buy ceilings are data-derived per item type, not a flat constant — a
-  // single 2,000-unit cap cannot be right when this catalogue's own
-  // per-item-type historical maxima span ~150 to ~6,700 units. Assert that
-  // spread actually exists in the shipped artifact.
-  assert.ok(model.buyCeilings, "artifact must publish the fitted buy ceilings");
-  assert.ok(model.buyCeilings.globalCeiling > 0);
-  const ceilingValues = Object.values(model.buyCeilings.byItemType);
-  assert.ok(new Set(ceilingValues).size > 1, "every item type got the same ceiling; the cap isn't data-derived");
-  assert.ok(Math.max(...ceilingValues) / Math.min(...ceilingValues) > 3, "ceilings should reflect the real spread");
-
-  // quantityCapped/highCapped must be present and self-consistent: a capped
-  // number is always exactly that product's own item-type ceiling, not an
-  // approximation and not the old flat constant.
-  assert.ok(recommended.every(({ recommendation, itemType }) => {
-    const expectedCeiling = model.buyCeilings.byItemType[itemType] ?? model.buyCeilings.globalCeiling;
-    return typeof recommendation.quantityCapped === "boolean"
-      && typeof recommendation.highCapped === "boolean"
-      && recommendation.buyCeiling === Math.round(expectedCeiling)
-      && (!recommendation.quantityCapped || recommendation.quantity === recommendation.buyCeiling)
-      && (!recommendation.highCapped || recommendation.high === recommendation.buyCeiling);
-  }));
-  const highCappedOnly = recommended.filter(
-    ({ recommendation }) => recommendation.highCapped && !recommendation.quantityCapped,
-  );
-  assert.ok(
-    highCappedOnly.length > 0,
-    "no product in this artifact exercises the high-capped-but-not-quantity-capped path",
-  );
+  const pageSource = await readFile(pageUrl, "utf8");
 
   assert.match(pageSource, /Minimum visual similarity/);
   assert.match(pageSource, /Target sell-through/);
@@ -192,4 +54,154 @@ test("keeps the pooled predictive forecast contract intact", async () => {
   assert.match(pageSource, /"Final order \(units\)"/);
   assert.doesNotMatch(pageSource, /"Estimated demand \(units\)"/);
   assert.doesNotMatch(pageSource, /"Analogue actual sales"|"Analogue original order"|"AI recommended quantity"/);
+});
+
+test("ships no catalogue of its own and renders an empty state until a build is activated", async () => {
+  const pageSource = await readFile(pageUrl, "utf8");
+
+  // The planner is upload-only: no bundled artifact, and no local image route
+  // reading a developer's DATA/ directory.
+  assert.equal(await exists(new URL("../app/generated-data.json", import.meta.url)), false);
+  assert.equal(await exists(new URL("../app/product-images", import.meta.url)), false);
+  assert.doesNotMatch(pageSource, /generated-data/);
+  assert.doesNotMatch(pageSource, /product-images/);
+  assert.doesNotMatch(pageSource, /"bundled"/);
+
+  assert.match(pageSource, /const EMPTY_DATASET: Dataset/);
+  assert.match(pageSource, /hasActiveBuild/);
+  assert.match(pageSource, /no-build-state/);
+  assert.match(pageSource, /Upload a catalogue to start planning/);
+  // Both data-backed views must be gated, or an empty dataset renders a
+  // workspace full of zeroes instead of the empty state.
+  assert.match(pageSource, /tab === "compare" && hasActiveBuild/);
+  assert.match(pageSource, /tab === "portfolio" && hasActiveBuild/);
+  // Every artifact-derived lookup has to be refreshed per build; capturing the
+  // demand model once at module load silently reused the previous build's priors.
+  assert.match(pageSource, /demandModel = dataset\.meta\.model\.demandModel/);
+});
+
+test("ships the dual-mode resumable upload workflow", async () => {
+  const [pageSource, cssSource, nextConfig] = await Promise.all([
+    readFile(pageUrl, "utf8"),
+    readFile(cssUrl, "utf8"),
+    readFile(nextConfigUrl, "utf8"),
+  ]);
+
+  assert.match(pageSource, /full_replace/);
+  assert.match(pageSource, /reuse_historical/);
+  assert.match(pageSource, /Reuse trained historical/);
+  assert.match(pageSource, /webkitdirectory/);
+  assert.match(pageSource, /uploadPool/);
+  assert.match(pageSource, /complete-upload/);
+  assert.match(pageSource, /EventSource/);
+  assert.match(pageSource, /validationReportUrl/);
+  assert.match(pageSource, /CSV, XLSX, XLSM, XLS, XLSB, or ODS/);
+  assert.match(cssSource, /\.upload-workspace/);
+  assert.match(nextConfig, /TURTLE_API_URL/);
+  assert.match(nextConfig, /source: "\/api\/:path\*"/);
+});
+
+test("keeps an analysis mounted while navigating between planner tabs", async () => {
+  const pageSource = await readFile(pageUrl, "utf8");
+
+  // The live EventSource and upload state belong to NewAnalysis. It must only
+  // be hidden between tabs; conditional rendering would unmount and reset it.
+  assert.match(pageSource, /<NewAnalysis\s+active=\{tab === "upload"\}/);
+  assert.match(pageSource, /className="upload-workspace page-wrap" hidden=\{!active\}/);
+  assert.doesNotMatch(pageSource, /\{tab === "upload" && \(\s*<NewAnalysis/);
+});
+
+test("keeps internal run and build IDs out of planner-facing labels", async () => {
+  const [pageSource, cssSource] = await Promise.all([
+    readFile(pageUrl, "utf8"),
+    readFile(cssUrl, "utf8"),
+  ]);
+
+  assert.doesNotMatch(pageSource, /historical\.id\.slice\(0, 8\)/);
+  assert.doesNotMatch(pageSource, /run\.id\.slice\(0, 8\)/);
+  assert.doesNotMatch(pageSource, /activeBuildId\.slice\(0, 8\)/);
+  assert.doesNotMatch(pageSource, /buildId\.slice\(0, 8\)/);
+  assert.doesNotMatch(pageSource, /Current analysis/);
+  assert.match(pageSource, /Last updated/);
+  assert.doesNotMatch(pageSource, /Recommendations last updated/);
+  assert.match(pageSource, /New recommendations activated/);
+  assert.match(pageSource, /Upload complete — ready for analysis/);
+  assert.match(pageSource, /uploaded successfully\. Select Start analysis to begin image processing\./);
+  assert.match(pageSource, /DISPLAY_MODEL_VERSION = "1\.0"/);
+  assert.doesNotMatch(pageSource, /v\{historical\.modelVersion\}/);
+  assert.match(pageSource, /timeZone: "Asia\/Kolkata"/);
+  assert.doesNotMatch(pageSource, /timeZoneName/);
+  assert.doesNotMatch(pageSource, /formatAnalysisDate\(run\.createdAt\)/);
+  assert.match(pageSource, /Last updated · \$\{formatAnalysisDate\(activeBuildCreatedAt\)\}/);
+  assert.match(pageSource, /className="historical-updated"/);
+  assert.match(cssSource, /grid-template-columns: minmax\(350px, 1\.35fr\) repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.match(cssSource, /\.historical-summary \.historical-updated\s*\{\s*white-space: nowrap !important;/);
+});
+
+test("recovers live progress after refreshes and interrupted event streams", async () => {
+  const pageSource = await readFile(pageUrl, "utf8");
+
+  assert.match(pageSource, /ACTIVE_ANALYSIS_RUN_KEY/);
+  assert.match(pageSource, /localStorage\.getItem\(ACTIVE_ANALYSIS_RUN_KEY\)/);
+  assert.match(pageSource, /fetch\("\/api\/runs\/active"/);
+  assert.match(pageSource, /new EventSource\(`\/api\/runs\/\$\{runId\}\/events`\)/);
+  assert.match(pageSource, /async function pollRun\(\)/);
+  assert.match(pageSource, /setInterval\(\(\) => void pollRun\(\), RUN_POLL_INTERVAL_MS\)/);
+  assert.match(pageSource, /Live progress was interrupted; checking the run automatically/);
+  assert.match(pageSource, /terminalHandled = true;\s*progressEvents\?\.close\(\);/);
+  assert.match(pageSource, /if \(!disposed && !terminalHandled\)/);
+
+  // Tracking belongs to a lifecycle effect so Fast Refresh can recreate it;
+  // the button handler should only transition the server into the queued state.
+  const startBody = pageSource.slice(
+    pageSource.indexOf("async function startAnalysis("),
+    pageSource.indexOf("async function cancelAnalysis("),
+  );
+  assert.doesNotMatch(startBody, /new EventSource/);
+});
+
+test("shows useful analysis timing instead of an unavailable ETA", async () => {
+  const pageSource = await readFile(pageUrl, "utf8");
+
+  assert.match(pageSource, /startedAt\?: string \| null/);
+  assert.match(pageSource, /completedAt\?: string \| null/);
+  assert.match(pageSource, /Time elapsed/);
+  assert.match(pageSource, /Total analysis time/);
+  assert.match(pageSource, /analysisElapsedSeconds/);
+  assert.match(pageSource, /setElapsedClock\(Date\.now\(\)\), 1000/);
+  assert.doesNotMatch(pageSource, /Time remaining|Estimating…/);
+});
+
+test("separates uploading from analysing, and never invites a click on running work", async () => {
+  const [pageSource, cssSource] = await Promise.all([
+    readFile(pageUrl, "utf8"),
+    readFile(cssUrl, "utf8"),
+  ]);
+
+  // Two named steps, not one button that silently does both.
+  assert.match(pageSource, /"Upload files"/);
+  assert.match(pageSource, /"Start analysis"/);
+  assert.match(pageSource, /async function uploadFiles\(/);
+  assert.match(pageSource, /async function startAnalysis\(/);
+  // complete-upload belongs to step two only; uploading must not trigger the build.
+  const uploadBody = pageSource.slice(
+    pageSource.indexOf("async function uploadFiles("),
+    pageSource.indexOf("async function startAnalysis("),
+  );
+  assert.doesNotMatch(uploadBody, /complete-upload/);
+
+  // Every phase the primary button can be in.
+  for (const phase of ["idle", "uploading", "upload-failed", "uploaded", "analysing", "done"]) {
+    assert.ok(pageSource.includes(`"${phase}"`), `missing upload phase: ${phase}`);
+  }
+  // Running work must not be styled as a call to action, and must be blocked.
+  assert.match(pageSource, /primaryDisabled \? "" : "primary"/);
+  assert.match(pageSource, /const running = phase === "uploading" \|\| phase === "analysing"/);
+  assert.match(pageSource, /disabled=\{primaryDisabled\}/);
+  assert.match(cssSource, /\.button:disabled/);
+  assert.match(cssSource, /\.button-spinner/);
+  // A resumable upload must survive a failure rather than restart from zero.
+  assert.match(pageSource, /Resume upload/);
+  assert.doesNotMatch(pageSource, /Successful replacement permanently removes the superseded active data/);
+  assert.doesNotMatch(pageSource, /Uploading only stages the files; no data is replaced until the analysis succeeds/);
 });

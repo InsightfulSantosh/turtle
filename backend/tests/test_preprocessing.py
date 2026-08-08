@@ -8,10 +8,6 @@ from data_pipeline.preprocessing import (
     preprocess_rows,
     standardize_fabric,
 )
-from data_pipeline.validation import (
-    DataValidationError,
-    validate_cleaned_rows,
-)
 
 
 @pytest.mark.parametrize(
@@ -70,21 +66,3 @@ def test_preprocessing_reports_identifier_collisions_and_fabric_review() -> None
     assert report.identifier_collisions_introduced == 1
     assert report.review_required_fabric == 1
     assert report.unspecified_fabric == 1
-    canonical = [
-        {
-            "product_id": row["CON"],
-            "fabric": row["CAT4"],
-        }
-        for row in cleaned
-    ]
-    validate_cleaned_rows(
-        "Historical",
-        canonical,
-        require_unique_identifiers=False,
-    )
-    with pytest.raises(DataValidationError, match="duplicate identifiers"):
-        validate_cleaned_rows(
-            "Historical",
-            canonical,
-            require_unique_identifiers=True,
-        )

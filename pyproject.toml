@@ -6,12 +6,6 @@ requires-python = ">=3.12"
 # single source of truth, installed with `uv pip install -r requirements.txt`.
 dependencies = []
 
-[project.scripts]
-turtle-prepare-data = "data_pipeline.prepare_real_data:main"
-turtle-index-fashion = "fashion_matching.index_catalog:main"
-turtle-match-fashion = "fashion_matching.match:main"
-turtle-evaluate-fashion = "fashion_matching.evaluation:main"
-
 [build-system]
 requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"

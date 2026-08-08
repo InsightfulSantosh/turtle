@@ -4,8 +4,7 @@ from pathlib import Path
 
 from PIL import Image
 
-from data_pipeline.settings import PipelineSettings
-from fashion_matching.artifact_vision import build_artifact_vision_output
+from fashion_matching.artifact_vision import VisionPaths, build_artifact_vision_output
 from fashion_matching.preprocessing import ImagePreprocessor
 
 
@@ -38,10 +37,9 @@ def _save_image(path: Path, colour: tuple[int, int, int]) -> None:
 def test_artifact_vision_embeds_only_mapped_product_images(
     tmp_path: Path,
 ) -> None:
-    settings = PipelineSettings(
-        data_root=tmp_path / "DATA",
-        temporary_root=tmp_path / "tmp",
-        output_path=tmp_path / "artifact.json",
+    settings = VisionPaths(
+        historical_image_root=tmp_path / "historical_images",
+        upcoming_image_root=tmp_path / "upcoming_images",
     )
     _save_image(
         settings.historical_image_root / "OTSH-100-1001.jpg",
@@ -110,10 +108,9 @@ def test_artifact_vision_embeds_only_mapped_product_images(
 def test_two_stage_visual_artifact_reranks_only_same_item_type_candidates(
     tmp_path: Path,
 ) -> None:
-    settings = PipelineSettings(
-        data_root=tmp_path / "DATA",
-        temporary_root=tmp_path / "tmp",
-        output_path=tmp_path / "artifact.json",
+    settings = VisionPaths(
+        historical_image_root=tmp_path / "historical_images",
+        upcoming_image_root=tmp_path / "upcoming_images",
     )
     for identifier, colour in (
         ("OTSH-100-1001", (255, 0, 0)),
@@ -224,10 +221,9 @@ def test_two_stage_visual_artifact_reranks_only_same_item_type_candidates(
 def test_pattern_gate_excludes_visibly_different_candidates_with_the_same_design_label(
     tmp_path: Path,
 ) -> None:
-    settings = PipelineSettings(
-        data_root=tmp_path / "DATA",
-        temporary_root=tmp_path / "tmp",
-        output_path=tmp_path / "artifact.json",
+    settings = VisionPaths(
+        historical_image_root=tmp_path / "historical_images",
+        upcoming_image_root=tmp_path / "upcoming_images",
     )
     _save_image(settings.historical_image_root / "OTSH-100-1001.jpg", (255, 0, 0))
     _save_image(settings.historical_image_root / "OTSH-101-1001.jpg", (0, 255, 0))
@@ -292,10 +288,9 @@ def test_pattern_gate_excludes_visibly_different_candidates_with_the_same_design
 def test_plain_ottr_bypasses_hard_pattern_gate_but_retains_dino_score(
     tmp_path: Path,
 ) -> None:
-    settings = PipelineSettings(
-        data_root=tmp_path / "DATA",
-        temporary_root=tmp_path / "tmp",
-        output_path=tmp_path / "artifact.json",
+    settings = VisionPaths(
+        historical_image_root=tmp_path / "historical_images",
+        upcoming_image_root=tmp_path / "upcoming_images",
     )
     _save_image(settings.historical_image_root / "OTTR-100-1001.jpg", (255, 0, 0))
     _save_image(settings.upcoming_image_root / "OTTR-200-1001.jpg", (0, 0, 255))
@@ -356,10 +351,9 @@ def test_plain_ottr_bypasses_hard_pattern_gate_but_retains_dino_score(
 
 
 def test_colour_gate_uses_image_colour_and_ignores_colour_labels(tmp_path: Path) -> None:
-    settings = PipelineSettings(
-        data_root=tmp_path / "DATA",
-        temporary_root=tmp_path / "tmp",
-        output_path=tmp_path / "artifact.json",
+    settings = VisionPaths(
+        historical_image_root=tmp_path / "historical_images",
+        upcoming_image_root=tmp_path / "upcoming_images",
     )
     _save_image(settings.historical_image_root / "OTSH-100-1001.jpg", (255, 0, 0))
     _save_image(settings.historical_image_root / "OTSH-101-1001.jpg", (0, 0, 255))

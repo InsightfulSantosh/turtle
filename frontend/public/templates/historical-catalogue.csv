@@ -1,0 +1,2 @@
+product_id,season,item_type,style_code,colour_code,design,category_type,fabric,colour,total_order_quantity,dispatch_quantity,sales_quantity,sell_through,ageing_days,weekly_sell_through
+OTSH-100-1001,AW25,OTSH,100,1001,PLAINS,FORMAL,100% Cotton,NAVY,500,500,350,0.70,140,0.035

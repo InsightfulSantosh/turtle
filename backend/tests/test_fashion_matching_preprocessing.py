@@ -12,20 +12,10 @@ from fashion_matching.appearance import (
     extract_appearance_features,
     requires_ottr_pattern_gate,
 )
-from fashion_matching.manifests import ManifestError, read_manifest
-from fashion_matching.models import ManifestRecord
 from fashion_matching.preprocessing import (
     ImagePreprocessor,
     ImageValidationError,
 )
-
-
-def _record(path: Path) -> ManifestRecord:
-    return ManifestRecord(
-        product_id="PRODUCT-1",
-        image_id="IMAGE-1",
-        image_path=path,
-    )
 
 
 def test_preprocessing_is_deterministic_and_preserves_aspect_ratio(
@@ -34,8 +24,8 @@ def test_preprocessing_is_deterministic_and_preserves_aspect_ratio(
     path = tmp_path / "item.png"
     Image.new("RGB", (80, 40), (10, 20, 30)).save(path)
     preprocessor = ImagePreprocessor()
-    first = preprocessor.prepare(_record(path))
-    second = preprocessor.prepare(_record(path))
+    first = preprocessor.prepare(path)
+    second = preprocessor.prepare(path)
     assert first.checksum == second.checksum
     assert first.image.tobytes() == second.image.tobytes()
     assert first.image.size == (80, 80)
@@ -49,7 +39,7 @@ def test_preprocessing_applies_exif_orientation(tmp_path: Path) -> None:
     exif = image.getexif()
     exif[274] = 6
     image.save(path, exif=exif)
-    prepared = ImagePreprocessor(pad_to_square=False).prepare(_record(path))
+    prepared = ImagePreprocessor(pad_to_square=False).prepare(path)
     assert prepared.image.size == (80, 40)
 
 
@@ -62,14 +52,14 @@ def test_preprocessing_rejects_missing_or_corrupt_images(
     if name.startswith("corrupt"):
         path.write_bytes(b"not-an-image")
     with pytest.raises(ImageValidationError):
-        ImagePreprocessor().prepare(_record(path))
+        ImagePreprocessor().prepare(path)
 
 
 def test_preprocessing_rejects_oversized_file(tmp_path: Path) -> None:
     path = tmp_path / "large.png"
     Image.new("RGB", (40, 40), "red").save(path)
     with pytest.raises(ImageValidationError, match="byte limit"):
-        ImagePreprocessor(max_bytes=10).prepare(_record(path))
+        ImagePreprocessor(max_bytes=10).prepare(path)
 
 
 def test_appearance_features_compare_dominant_garment_palettes() -> None:
@@ -168,25 +158,3 @@ def test_ciede2000_matches_published_reference_pair() -> None:
     right = [50.0, 0.0, -82.7485]
 
     assert float(delta_e_ciede2000(left, right)) == pytest.approx(2.0425, abs=1e-4)
-
-
-def test_manifest_requires_unique_image_ids_and_does_not_use_id_as_text(
-    tmp_path: Path,
-) -> None:
-    image_path = tmp_path / "item.png"
-    Image.new("RGB", (40, 40), "red").save(image_path)
-    manifest = tmp_path / "catalog.csv"
-    manifest.write_text(
-        "product_id,image_id,image_path,description\nSKU-SECRET,IMAGE-1,item.png,Red cotton shirt\n",
-        encoding="utf-8",
-    )
-    records = read_manifest(manifest)
-    assert records[0].text == "Red cotton shirt"
-    assert "SKU-SECRET" not in records[0].text
-
-    manifest.write_text(
-        "product_id,image_id,image_path\nP1,DUP,item.png\nP2,DUP,item.png\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(ManifestError, match="duplicate image_id"):
-        read_manifest(manifest)

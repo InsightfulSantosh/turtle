@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import dataJson from "./generated-data.json";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type Confidence = "High" | "Medium" | "Low";
-type Tab = "compare" | "portfolio";
+type Tab = "compare" | "portfolio" | "upload";
 
 type HistoricalItem = {
   id: string;
@@ -132,17 +131,63 @@ type Decision = {
   forecast: DemandForecast | null;
 };
 
-const dataset = dataJson as unknown as Dataset;
-const historyById = new Map(dataset.historical.map((item) => [item.id, item]));
-const imageBackedUpcoming = dataset.upcoming.filter((item) => Boolean(item.imageUrl));
-const visibleUpcoming =
-  imageBackedUpcoming.length > 0 ? imageBackedUpcoming : dataset.upcoming;
-const productSegments = Array.from(
-  new Set(visibleUpcoming.map((item) => item.itemType)),
-).sort();
-const visualMatchingAvailable =
-  dataset.meta.visionModel.upcomingCoverage > 0 &&
-  dataset.meta.visionModel.historicalCoverage > 0;
+/**
+ * The workspace ships with no catalogue of its own: every number it shows comes
+ * from a build the user uploaded through the New analysis tab. Until one is
+ * activated the planner runs on this empty dataset and renders its empty state.
+ */
+const EMPTY_DATASET: Dataset = {
+  meta: {
+    upcomingSeason: "—",
+    upcomingItems: 0,
+    upcomingImageCoverage: 0,
+    missingUpcomingImages: [],
+    visionModel: { historicalCoverage: 0, upcomingCoverage: 0 },
+    model: { minimumVisualScore: 0.5, targetSellThrough: 0.7 },
+  },
+  historical: [],
+  upcoming: [],
+};
+
+/** Stands in for the selected product while no build is active, so the
+ * workspace's hooks stay unconditional and its empty state is a render guard
+ * rather than an early return. */
+const PLACEHOLDER_UPCOMING: UpcomingItem = {
+  id: "",
+  itemType: "",
+  design: "",
+  categoryType: "",
+  fabric: "",
+  colour: "",
+  imageUrl: null,
+  matches: [],
+  recommendation: { matchConfidence: "Low" },
+};
+
+let dataset = EMPTY_DATASET;
+let historyById = new Map<string, HistoricalItem>();
+let visibleUpcoming: UpcomingItem[] = [];
+let productSegments: string[] = [];
+let visualMatchingAvailable = false;
+let buyCeilings: BuyCeilings | undefined;
+let demandModel: DemandModel | undefined;
+
+function installDataset(next: Dataset) {
+  dataset = next;
+  historyById = new Map(dataset.historical.map((item) => [item.id, item]));
+  const imageBackedUpcoming = dataset.upcoming.filter((item) => Boolean(item.imageUrl));
+  visibleUpcoming = imageBackedUpcoming.length > 0 ? imageBackedUpcoming : dataset.upcoming;
+  productSegments = Array.from(new Set(visibleUpcoming.map((item) => item.itemType))).sort();
+  visualMatchingAvailable =
+    dataset.meta.visionModel.upcomingCoverage > 0 &&
+    dataset.meta.visionModel.historicalCoverage > 0;
+  buyCeilings = dataset.meta.model.buyCeilings;
+  // Read through the live dataset rather than captured once at module load:
+  // every activated build brings its own priors.
+  demandModel = dataset.meta.model.demandModel;
+}
+
+installDataset(dataset);
 const numberFormatter = new Intl.NumberFormat("en-IN");
 
 const attributeValueReaders: Record<string, (item: ComparableProduct) => string> = {
@@ -215,8 +260,6 @@ function packRoundedUncapped(value: number) {
 function packRoundedCapped(value: number, ceiling: number) {
   return Math.max(0, Math.min(ceiling, packRoundedRaw(value)));
 }
-
-const buyCeilings = dataset.meta.model.buyCeilings;
 
 function ceilingFor(item: ComparableProduct): number {
   if (!buyCeilings) return FALLBACK_MAX_BUY;
@@ -331,8 +374,6 @@ function newsvendorOrder(logMu: number, logSigma: number, targetSellThrough: num
   }
   return (low + high) / 2;
 }
-
-const demandModel = dataset.meta.model.demandModel;
 
 function priorFor(item: ComparableProduct): DemandPrior | undefined {
   if (!demandModel) return undefined;
@@ -534,8 +575,8 @@ function ProductImage({
   eager?: boolean;
 }) {
   const [failedSrc, setFailedSrc] = useState<string | null>(null);
-  // Every imageUrl the artifact publishes is a /product-images/ path served by
-  // this app's own route handler; there is no live API to rebase against.
+  // Every imageUrl the artifact publishes is an /api/builds/{id}/images/ path,
+  // proxied to the analysis service, so it is already same-origin here.
   const failed = Boolean(src && failedSrc === src);
 
   if (!src || failed) {
@@ -626,11 +667,655 @@ function ScoreRing({ score, label }: { score: number; label: string }) {
   );
 }
 
+type HistoricalSummary = {
+  id: string;
+  createdAt: string;
+  productCount: number;
+  imageCoverage: number;
+  modelVersion: string;
+};
+
+type AnalysisRun = {
+  id: string;
+  mode: "full_replace" | "reuse_historical";
+  status: "uploading" | "queued" | "processing" | "succeeded" | "failed" | "cancelled";
+  stage: string;
+  progress: number;
+  message: string;
+  error?: string | null;
+  buildId?: string | null;
+  processedCount?: number;
+  totalCount?: number;
+  cacheHits?: number;
+  etaSeconds?: number | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+  updatedAt?: string;
+  /** Per-catalogue encode counters: a single blended total cannot show which
+   * half of the build is running, and the two phases are very different sizes. */
+  historicalProcessed?: number;
+  historicalTotal?: number;
+  upcomingProcessed?: number;
+  upcomingTotal?: number;
+  validationReportUrl?: string | null;
+};
+
+const stageLabels: Record<string, string> = {
+  uploading: "Uploading files",
+  queued: "Waiting for an analysis worker",
+  validating: "Validating catalogues and images",
+  indexing_history: "Encoding historical images",
+  matching_upcoming: "Encoding upcoming images and matching",
+  building_results: "Building recommendations",
+  succeeded: "Recommendations ready",
+  failed: "Analysis failed",
+  cancelled: "Analysis cancelled",
+};
+
+function stageLabel(run: AnalysisRun) {
+  return stageLabels[run.stage] ?? (run.message || run.stage);
+}
+
+function formatElapsedDuration(seconds: number) {
+  const wholeSeconds = Math.max(0, Math.floor(seconds));
+  if (wholeSeconds < 60) return `${wholeSeconds}s`;
+  const minutes = Math.floor(wholeSeconds / 60);
+  const remainder = wholeSeconds % 60;
+  if (minutes < 60) return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
+}
+
+function analysisElapsedSeconds(run: AnalysisRun, now: number) {
+  if (!run.startedAt) return null;
+  const start = Date.parse(run.startedAt);
+  const terminal = run.status === "succeeded" || run.status === "failed" || run.status === "cancelled";
+  const endValue = run.completedAt ?? (terminal ? run.updatedAt : undefined);
+  const end = endValue ? Date.parse(endValue) : now;
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  return Math.max(0, (end - start) / 1000);
+}
+
+const analysisDateFormatter = new Intl.DateTimeFormat("en-IN", {
+  day: "numeric",
+  month: "short",
+  year: "numeric",
+  hour: "numeric",
+  minute: "2-digit",
+  timeZone: "Asia/Kolkata",
+});
+
+function formatAnalysisDate(value: string) {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "Available" : analysisDateFormatter.format(date);
+}
+
+type UploadEntry = {
+  catalog: "historical" | "upcoming";
+  kind: "catalogue" | "images";
+  file: File;
+};
+
+const catalogueAccept = ".csv,.xlsx,.xlsm,.xls,.xlsb,.ods";
+const DISPLAY_MODEL_VERSION = "1.0";
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/**
+ * The planner has no data of its own, so a failed API call is not a detail —
+ * it is the whole screen. The Next.js rewrite reports an unreachable analysis
+ * service as a bare `500 Internal Server Error` with no body, which says
+ * nothing about the actual cause, so name it here.
+ */
+function describeServiceFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/\b(500|502|503|504)\b/.test(message) || /failed to fetch|networkerror|load failed/i.test(message)) {
+    return "Cannot reach the analysis service. Start it with `make api-dev` and reload.";
+  }
+  return message;
+}
+
+async function responseJson<T>(response: Response): Promise<T> {
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { detail?: string } | null;
+    throw new Error(body?.detail || `${response.status} ${response.statusText}`);
+  }
+  return response.json() as Promise<T>;
+}
+
+const UPLOAD_ATTEMPTS = 4;
+const ACTIVE_ANALYSIS_RUN_KEY = "turtle.active-analysis-run";
+const RUN_POLL_INTERVAL_MS = 2500;
+
+async function uploadAttempt(
+  runId: string,
+  entry: UploadEntry,
+  signal: AbortSignal,
+  onBytes: (value: number) => void,
+) {
+  const filename = encodeURIComponent(entry.file.name);
+  const url = `/api/runs/${runId}/uploads/${entry.catalog}/${entry.kind}/${filename}`;
+  const head = await fetch(url, { method: "HEAD", signal });
+  if (!head.ok) throw new Error(`${entry.file.name}: ${head.status} ${head.statusText}`);
+  const offset = Number(head.headers.get("Upload-Offset") ?? 0);
+  if (offset > entry.file.size) throw new Error(`${entry.file.name}: remote upload is larger than the local file`);
+  if (offset === entry.file.size) return;
+  const response = await fetch(url, {
+    method: "PUT",
+    headers: {
+      "Content-Type": entry.file.type || "application/octet-stream",
+      "Upload-Offset": String(offset),
+      "Upload-Length": String(entry.file.size),
+    },
+    body: entry.file.slice(offset),
+    signal,
+  });
+  if (!response.ok) throw new Error(`${entry.file.name}: ${response.status} ${response.statusText}`);
+  onBytes(entry.file.size - offset);
+}
+
+/**
+ * A dropped connection part-way through a large image used to fail the whole
+ * run — hundreds of already-uploaded megabytes thrown away because one body
+ * did not finish. The protocol is resumable by design, so retry instead: each
+ * attempt re-reads the server's offset and sends only the remainder, and the
+ * per-attempt byte counts still add up to exactly one file.
+ */
+async function uploadOne(
+  runId: string,
+  entry: UploadEntry,
+  signal: AbortSignal,
+  onBytes: (value: number) => void,
+) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await uploadAttempt(runId, entry, signal, onBytes);
+      return;
+    } catch (error) {
+      // A user cancellation must stay immediate, never retried.
+      if (signal.aborted || attempt >= UPLOAD_ATTEMPTS) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 300 * attempt));
+    }
+  }
+}
+
+async function uploadPool(
+  entries: UploadEntry[],
+  runId: string,
+  signal: AbortSignal,
+  onBytes: (value: number) => void,
+) {
+  let cursor = 0;
+  let failed: unknown = null;
+  const workers = Array.from({ length: Math.min(4, entries.length) }, async () => {
+    while (!failed && cursor < entries.length) {
+      const entry = entries[cursor++];
+      try {
+        await uploadOne(runId, entry, signal, onBytes);
+      } catch (error) {
+        failed = error;
+      }
+    }
+  });
+  await Promise.all(workers);
+  if (failed) throw failed;
+}
+
+function ImageUploadField({
+  label,
+  files,
+  onFiles,
+}: {
+  label: string;
+  files: File[];
+  onFiles: (files: File[]) => void;
+}) {
+  const setSelection = (list: FileList | null) => onFiles(Array.from(list ?? []));
+  return (
+    <div className="upload-field image-upload-field">
+      <span>{label}</span>
+      <div className="upload-picker-actions">
+        <label className="button secondary">
+          Select image files
+          <input hidden type="file" accept="image/jpeg,image/png,image/webp" multiple onChange={(event) => setSelection(event.target.files)} />
+        </label>
+        <label className="button secondary">
+          Select image folder
+          <input
+            hidden
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            multiple
+            {...({ webkitdirectory: "" } as Record<string, string>)}
+            onChange={(event) => setSelection(event.target.files)}
+          />
+        </label>
+      </div>
+      <small>{files.length ? `${files.length} images · ${formatBytes(files.reduce((sum, file) => sum + file.size, 0))}` : "JPEG, PNG, or WebP; filename must match product_id"}</small>
+    </div>
+  );
+}
+
+function NewAnalysis({
+  active,
+  historical,
+  onActivated,
+}: {
+  active: boolean;
+  historical: HistoricalSummary | null;
+  onActivated: (buildId: string) => Promise<void>;
+}) {
+  const [selectedMode, setMode] = useState<"full_replace" | "reuse_historical" | null>(null);
+  const mode = selectedMode ?? (historical ? "reuse_historical" : "full_replace");
+  const [historicalFile, setHistoricalFile] = useState<File | null>(null);
+  const [historicalImages, setHistoricalImages] = useState<File[]>([]);
+  const [upcomingFile, setUpcomingFile] = useState<File | null>(null);
+  const [upcomingImages, setUpcomingImages] = useState<File[]>([]);
+  const [run, setRun] = useState<AnalysisRun | null>(null);
+  const [uploadedBytes, setUploadedBytes] = useState(0);
+  const [totalBytes, setTotalBytes] = useState(0);
+  const [uploadComplete, setUploadComplete] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [connectionWarning, setConnectionWarning] = useState("");
+  const [elapsedClock, setElapsedClock] = useState(() => Date.now());
+  const abortRef = useRef<AbortController | null>(null);
+  const onActivatedRef = useRef(onActivated);
+  const trackedRunId = run?.id;
+  const trackedRunStatus = run?.status;
+
+  useEffect(() => {
+    onActivatedRef.current = onActivated;
+  }, [onActivated]);
+
+  useEffect(() => {
+    if (!run?.startedAt || (run.status !== "queued" && run.status !== "processing")) return;
+    const timer = window.setInterval(() => setElapsedClock(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [run?.id, run?.startedAt, run?.status]);
+
+  /** Recover an analysis after a full reload. File inputs cannot be restored,
+   * but once inference has started the run ID is all the browser needs. */
+  useEffect(() => {
+    const controller = new AbortController();
+    async function restoreRun() {
+      const storedRunId = window.localStorage.getItem(ACTIVE_ANALYSIS_RUN_KEY);
+      let restored: AnalysisRun | null = null;
+      if (storedRunId) {
+        try {
+          restored = await responseJson<AnalysisRun>(await fetch(`/api/runs/${storedRunId}`, {
+            cache: "no-store",
+            signal: controller.signal,
+          }));
+        } catch {
+          if (controller.signal.aborted) return;
+          window.localStorage.removeItem(ACTIVE_ANALYSIS_RUN_KEY);
+        }
+      }
+      if (!restored) {
+        restored = await responseJson<AnalysisRun | null>(await fetch("/api/runs/active", {
+          cache: "no-store",
+          signal: controller.signal,
+        }));
+      }
+      if (restored) {
+        setRun(restored);
+        const stillRunning = restored.status === "queued" || restored.status === "processing";
+        setBusy(stillRunning);
+        if (!stillRunning) {
+          window.localStorage.removeItem(ACTIVE_ANALYSIS_RUN_KEY);
+          if (restored.status === "failed") setError(restored.error || restored.message);
+        }
+      }
+    }
+    void restoreRun().catch((caught) => {
+      if (controller.signal.aborted) return;
+      setConnectionWarning(`Could not restore the previous run: ${describeServiceFailure(caught)}`);
+    });
+    return () => controller.abort();
+  }, []);
+
+  /** Own progress tracking for the lifetime of the run, rather than inside the
+   * button click. Effects reconnect after Fast Refresh/remount, while polling
+   * guarantees forward progress even when an SSE proxy silently buffers. */
+  useEffect(() => {
+    if (!trackedRunId || (trackedRunStatus !== "queued" && trackedRunStatus !== "processing")) return;
+    const runId = trackedRunId;
+    window.localStorage.setItem(ACTIVE_ANALYSIS_RUN_KEY, runId);
+    let disposed = false;
+    let terminalHandled = false;
+    let pollInFlight = false;
+    let progressEvents: EventSource | null = null;
+
+    function acceptUpdate(update: AnalysisRun) {
+      if (disposed || terminalHandled) return;
+      setRun(update);
+      if (update.status === "queued" || update.status === "processing") return;
+
+      terminalHandled = true;
+      progressEvents?.close();
+      setBusy(false);
+      setConnectionWarning("");
+      window.localStorage.removeItem(ACTIVE_ANALYSIS_RUN_KEY);
+      if (update.status === "succeeded" && update.buildId) {
+        void onActivatedRef.current(update.buildId).catch((caught) => {
+          setError(caught instanceof Error ? caught.message : "The completed build could not be loaded");
+        });
+      } else if (update.status === "failed") {
+        setError(update.error || update.message);
+      }
+    }
+
+    const events = new EventSource(`/api/runs/${runId}/events`);
+    progressEvents = events;
+    events.onopen = () => {
+      if (!disposed) setConnectionWarning("");
+    };
+    events.onmessage = (event) => {
+      try {
+        acceptUpdate(JSON.parse(event.data) as AnalysisRun);
+      } catch {
+        setConnectionWarning("Live progress was unreadable; checking the run automatically…");
+      }
+    };
+    events.onerror = () => {
+      if (!disposed && !terminalHandled) {
+        setConnectionWarning("Live progress was interrupted; checking the run automatically…");
+      }
+      // EventSource reconnects itself. Polling below covers proxies that keep a
+      // connection open but stop delivering incremental events.
+    };
+
+    async function pollRun() {
+      if (disposed || terminalHandled || pollInFlight) return;
+      pollInFlight = true;
+      try {
+        const update = await responseJson<AnalysisRun>(await fetch(`/api/runs/${runId}`, {
+          cache: "no-store",
+        }));
+        setConnectionWarning("");
+        acceptUpdate(update);
+      } catch {
+        if (!disposed) {
+          setConnectionWarning("Progress updates are reconnecting; the analysis is still running on the server.");
+        }
+      } finally {
+        pollInFlight = false;
+      }
+    }
+
+    void pollRun();
+    const pollTimer = window.setInterval(() => void pollRun(), RUN_POLL_INTERVAL_MS);
+    return () => {
+      disposed = true;
+      events.close();
+      window.clearInterval(pollTimer);
+    };
+  }, [trackedRunId, trackedRunStatus]);
+
+  function missingSelection(): string {
+    if (!upcomingFile || !upcomingImages.length) {
+      return "Choose the upcoming catalogue and image files or folder.";
+    }
+    if (mode === "full_replace" && (!historicalFile || !historicalImages.length)) {
+      return "Full replacement requires the historical catalogue and images.";
+    }
+    return "";
+  }
+
+  function uploadEntries(): UploadEntry[] {
+    return [
+      ...(mode === "full_replace" && historicalFile
+        ? [{ catalog: "historical" as const, kind: "catalogue" as const, file: historicalFile }, ...historicalImages.map((file) => ({ catalog: "historical" as const, kind: "images" as const, file }))]
+        : []),
+      ...(upcomingFile ? [{ catalog: "upcoming" as const, kind: "catalogue" as const, file: upcomingFile }] : []),
+      ...upcomingImages.map((file) => ({ catalog: "upcoming" as const, kind: "images" as const, file })),
+    ];
+  }
+
+  /** Step one. Creates the run and transfers the files, then stops: the run
+   * stays open on the server until the planner explicitly starts the analysis,
+   * so a large upload is never silently followed by an hour of CPU inference. */
+  async function uploadFiles() {
+    const problem = missingSelection();
+    if (problem) {
+      setError(problem);
+      return;
+    }
+    setError("");
+    const entries = uploadEntries();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setBusy(true);
+    setUploadComplete(false);
+    // A resumed upload keeps its byte total; only a brand-new run resets it.
+    const existing = run;
+    if (!existing) {
+      setUploadedBytes(0);
+      setTotalBytes(entries.reduce((sum, entry) => sum + entry.file.size, 0));
+    }
+    try {
+      const active = existing ?? await responseJson<AnalysisRun>(await fetch("/api/runs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode }),
+        signal: controller.signal,
+      }));
+      setRun(active);
+      await uploadPool(entries, active.id, controller.signal, (delta) => setUploadedBytes((value) => value + delta));
+      setUploadComplete(true);
+      setRun(await responseJson<AnalysisRun>(await fetch(`/api/runs/${active.id}`)));
+    } catch (caught) {
+      // The run is deliberately left open so the same button can resume it:
+      // every byte already accepted is still on the server.
+      setError(caught instanceof Error ? caught.message : "Upload failed");
+    } finally {
+      setBusy(false);
+      abortRef.current = null;
+    }
+  }
+
+  /** Step two. Only reachable once every file is on the server. */
+  async function startAnalysis() {
+    if (!run) return;
+    setError("");
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setBusy(true);
+    try {
+      const queued = await responseJson<AnalysisRun>(await fetch(`/api/runs/${run.id}/complete-upload`, {
+        method: "POST",
+        signal: controller.signal,
+      }));
+      window.localStorage.setItem(ACTIVE_ANALYSIS_RUN_KEY, queued.id);
+      setRun(queued);
+    } catch (caught) {
+      setBusy(false);
+      setError(caught instanceof Error ? caught.message : "Analysis failed");
+    } finally {
+      abortRef.current = null;
+    }
+  }
+
+  async function cancelAnalysis() {
+    abortRef.current?.abort();
+    if (run?.id) {
+      const cancelled = await responseJson<AnalysisRun>(await fetch(`/api/runs/${run.id}/cancel`, { method: "POST" }));
+      setRun(cancelled);
+    }
+    window.localStorage.removeItem(ACTIVE_ANALYSIS_RUN_KEY);
+    setBusy(false);
+  }
+
+  function resetForNewUpload() {
+    setRun(null);
+    setUploadComplete(false);
+    setUploadedBytes(0);
+    setTotalBytes(0);
+    setError("");
+    setConnectionWarning("");
+    window.localStorage.removeItem(ACTIVE_ANALYSIS_RUN_KEY);
+  }
+
+  const uploadProgress = totalBytes ? uploadedBytes / totalBytes : 0;
+  const displayedProgress = run?.status === "uploading" ? uploadProgress : run?.progress ?? 0;
+
+  /**
+   * The flow is two deliberate steps, so the primary action has to name the one
+   * step it will actually perform. A single "Start analysis" button that also
+   * silently uploaded a gigabyte gave no way to tell the phases apart, and
+   * stayed highlighted while work was already running.
+   */
+  const phase: "idle" | "uploading" | "upload-failed" | "uploaded" | "analysing" | "done" =
+    run === null
+      ? "idle"
+      : run.status === "uploading"
+        ? (busy ? "uploading" : uploadComplete ? "uploaded" : "upload-failed")
+        : run.status === "queued" || run.status === "processing"
+          ? "analysing"
+          : "done";
+  const running = phase === "uploading" || phase === "analysing";
+  const primaryAction = {
+    idle: { label: "Upload files", onClick: uploadFiles },
+    uploading: { label: "Uploading…", onClick: uploadFiles },
+    "upload-failed": { label: "Resume upload", onClick: uploadFiles },
+    uploaded: { label: "Start analysis", onClick: startAnalysis },
+    analysing: { label: "Analysis running…", onClick: startAnalysis },
+    done: { label: "Start another analysis", onClick: resetForNewUpload },
+  }[phase];
+  const primaryDisabled = running || (phase === "idle" && Boolean(missingSelection()));
+  const elapsedSeconds = run ? analysisElapsedSeconds(run, elapsedClock) : null;
+  const analysisIsRunning = run?.status === "queued" || run?.status === "processing";
+
+  return (
+    <section className="upload-workspace page-wrap" hidden={!active}>
+      <div className="upload-hero">
+        <span className="eyebrow">Versioned catalogue analysis</span>
+        <h1>New analysis</h1>
+        <p>The current planner stays available until every new recommendation is complete and validated.</p>
+        <div className="template-links">
+          <a href="/templates/historical-catalogue.csv">Historical CSV template</a>
+          <a href="/templates/upcoming-catalogue.csv">Upcoming CSV template</a>
+        </div>
+      </div>
+      <div className="analysis-mode-grid">
+        <button className={mode === "full_replace" ? "active" : ""} onClick={() => setMode("full_replace")}> 
+          <strong>Replace historical + upcoming</strong>
+          <span>Upload both catalogues and rebuild the historical visual evidence.</span>
+        </button>
+        <button disabled={!historical} className={mode === "reuse_historical" ? "active" : ""} onClick={() => setMode("reuse_historical")}> 
+          <strong>Reuse trained historical</strong>
+          <span>{historical ? "Upload only the new upcoming catalogue." : "Available after the first successful full build."}</span>
+        </button>
+      </div>
+      {historical && (
+        <div className="historical-summary">
+          <span><small>Historical catalogue</small><strong className="historical-updated">Updated {formatAnalysisDate(historical.createdAt)}</strong></span>
+          <span><small>Products</small><strong>{historical.productCount}</strong></span>
+          <span><small>Images</small><strong>{historical.imageCoverage}</strong></span>
+          <span><small>Model</small><strong>v{DISPLAY_MODEL_VERSION}</strong></span>
+        </div>
+      )}
+      <div className="upload-catalog-grid">
+        {mode === "full_replace" && (
+          <article className="upload-catalog-card">
+            <h2><i>1</i> Historical catalogue</h2>
+            <label className="upload-field"><span>Historical catalogue file</span><input type="file" accept={catalogueAccept} onChange={(event) => setHistoricalFile(event.target.files?.[0] ?? null)} /><small>CSV, XLSX, XLSM, XLS, XLSB, or ODS using the canonical columns</small></label>
+            <ImageUploadField label="Historical product images" files={historicalImages} onFiles={setHistoricalImages} />
+          </article>
+        )}
+        <article className="upload-catalog-card">
+          <h2><i>{mode === "full_replace" ? 2 : 1}</i> Upcoming catalogue</h2>
+          <label className="upload-field"><span>Upcoming catalogue file</span><input type="file" accept={catalogueAccept} onChange={(event) => setUpcomingFile(event.target.files?.[0] ?? null)} /><small>CSV, XLSX, XLSM, XLS, XLSB, or ODS using the canonical columns</small></label>
+          <ImageUploadField label="Upcoming product images" files={upcomingImages} onFiles={setUpcomingImages} />
+        </article>
+      </div>
+      {run && (
+        <div className={`run-status ${run.status}`} aria-busy={running}>
+          <div>
+            <strong>
+              {phase === "uploaded"
+                ? "Upload complete — ready for analysis"
+                : phase === "upload-failed"
+                  ? "Upload interrupted"
+                  : stageLabel(run)}
+            </strong>
+            <span>{Math.round((phase === "uploaded" ? 1 : displayedProgress) * 100)}%</span>
+          </div>
+          <progress max="1" value={phase === "uploaded" ? 1 : displayedProgress} />
+          {run.status === "uploading" ? (
+            <small>
+              {phase === "uploaded"
+                ? `${formatBytes(totalBytes)} uploaded successfully. Select Start analysis to begin image processing.`
+                : `Uploaded ${formatBytes(uploadedBytes)} of ${formatBytes(totalBytes)}`}
+            </small>
+          ) : (
+            <>
+              <dl className="encode-counters">
+                <div>
+                  <dt>Historical encoded</dt>
+                  <dd>
+                    {run.mode === "reuse_historical"
+                      ? "Reused"
+                      : `${run.historicalProcessed ?? 0} / ${run.historicalTotal ?? 0}`}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Upcoming encoded</dt>
+                  <dd>{`${run.upcomingProcessed ?? 0} / ${run.upcomingTotal ?? 0}`}</dd>
+                </div>
+                <div>
+                  <dt>{analysisIsRunning ? "Time elapsed" : "Total analysis time"}</dt>
+                  <dd>{elapsedSeconds === null ? "Not available" : formatElapsedDuration(elapsedSeconds)}</dd>
+                </div>
+              </dl>
+              <small>
+                {run.totalCount
+                  ? `${run.processedCount ?? 0}/${run.totalCount} images total · ${run.cacheHits ?? 0} cache hits`
+                  : "Preparing image processing…"}
+              </small>
+            </>
+          )}
+        </div>
+      )}
+      {error && <div className="upload-error">{error}{run?.validationReportUrl && <> · <a href={run.validationReportUrl}>Download validation report</a></>}</div>}
+      {connectionWarning && <div className="upload-warning" role="status">{connectionWarning}</div>}
+      <div className="upload-submit-row">
+        {/* Muted, never "primary", while work is in flight: a highlighted
+            call-to-action invites a click on something already running. */}
+        <button
+          className={`button ${primaryDisabled ? "" : "primary"}`}
+          disabled={primaryDisabled}
+          aria-busy={running}
+          onClick={primaryAction.onClick}
+        >
+          {running && <span className="button-spinner" aria-hidden="true" />}
+          {primaryAction.label}
+        </button>
+        {(running || phase === "uploaded" || phase === "upload-failed") && (
+          <button className="button secondary" onClick={cancelAnalysis}>
+            {phase === "analysing" ? "Cancel analysis" : "Discard upload"}
+          </button>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function App() {
   const initialItem = visibleUpcoming.find(
     (item) => item.recommendation.matchConfidence === "High" && item.imageUrl,
-  ) ?? visibleUpcoming[0];
-  const [tab, setTab] = useState<Tab>("compare");
+  ) ?? visibleUpcoming[0] ?? PLACEHOLDER_UPCOMING;
+  const [tab, setTab] = useState<Tab>(visibleUpcoming.length > 0 ? "compare" : "upload");
+  const [dataRevision, setDataRevision] = useState(0);
+  const [activeBuildId, setActiveBuildId] = useState("");
+  const [activeBuildCreatedAt, setActiveBuildCreatedAt] = useState("");
+  const [activeHistorical, setActiveHistorical] = useState<HistoricalSummary | null>(null);
   const [selectedId, setSelectedId] = useState(initialItem.id);
   const [queueSearch, setQueueSearch] = useState("");
   const [segment, setSegment] = useState("All");
@@ -645,16 +1330,27 @@ function App() {
   const [overrides, setOverrides] = useState<Record<string, number>>({});
   const [approvedIds, setApprovedIds] = useState<Record<string, boolean>>({});
   const [toast, setToast] = useState("");
+  const [serviceError, setServiceError] = useState("");
+  const tabChosenByUser = useRef(false);
 
+  function chooseTab(next: Tab) {
+    tabChosenByUser.current = true;
+    setTab(next);
+  }
+
+  const hasActiveBuild = visibleUpcoming.length > 0;
   const selected = visibleUpcoming.find((item) => item.id === selectedId) ?? initialItem;
   const decision = useMemo(
-    () => makeDecision(
-      selected,
-      minimumSimilarity,
-      targetSellThrough,
-      focusedHistoricalId,
-    ),
-    [selected, minimumSimilarity, targetSellThrough, focusedHistoricalId],
+    () => {
+      void dataRevision;
+      return makeDecision(
+        selected,
+        minimumSimilarity,
+        targetSellThrough,
+        focusedHistoricalId,
+      );
+    },
+    [selected, minimumSimilarity, targetSellThrough, focusedHistoricalId, dataRevision],
   );
   const selectedMatches = decision.eligible.slice(0, 4);
 
@@ -664,13 +1360,64 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
+  async function refreshActive(expectedBuildId?: string) {
+    const activeResponse = await fetch("/api/active", { cache: "no-store" });
+    // 404 is the documented "nothing uploaded yet" answer, not a failure: it is
+    // the empty state, and must not be reported as a broken service.
+    if (activeResponse.status === 404 && !expectedBuildId) {
+      setActiveBuildId("");
+      setActiveBuildCreatedAt("");
+      return;
+    }
+    const active = await responseJson<{
+      id: string;
+      createdAt: string;
+      artifactUrl: string;
+    }>(activeResponse);
+    const artifactUrl = expectedBuildId ? `/api/builds/${expectedBuildId}/artifact` : active.artifactUrl;
+    const artifact = await responseJson<Dataset>(await fetch(artifactUrl, { cache: "no-store" }));
+    installDataset(artifact);
+    const nextInitial = visibleUpcoming.find((item) => item.recommendation.matchConfidence === "High" && item.imageUrl) ?? visibleUpcoming[0];
+    if (nextInitial) setSelectedId(nextInitial.id);
+    setFocusedHistoricalId(null);
+    setMinimumSimilarity(dataset.meta.model.minimumVisualScore);
+    setTargetSellThrough(dataset.meta.model.targetSellThrough ?? 0.70);
+    setActiveBuildId(expectedBuildId ?? active.id);
+    setActiveBuildCreatedAt(active.createdAt);
+    setDataRevision((value) => value + 1);
+    const summary = await responseJson<HistoricalSummary | null>(await fetch("/api/historical/active", { cache: "no-store" }));
+    setActiveHistorical(summary);
+  }
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      refreshActive()
+        .then(() => {
+          setServiceError("");
+          // The first render has no dataset — the build is fetched — so the
+          // workspace opens on New analysis. Once a build does load, move to
+          // Compare, unless the user has already picked a tab themselves.
+          if (visibleUpcoming.length > 0 && !tabChosenByUser.current) setTab("compare");
+        })
+        .catch((error) => {
+          // Reaching here means the request itself failed, not that the
+          // catalogue is empty — most often the analysis service is not
+          // running, which the Next.js proxy reports as a bare 500.
+          setServiceError(describeServiceFailure(error));
+        });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
   const portfolio = useMemo(
-    () =>
-      visibleUpcoming.map((item) => ({
+    () => {
+      void dataRevision;
+      return visibleUpcoming.map((item) => ({
         item,
         decision: makeDecision(item, minimumSimilarity, targetSellThrough),
-      })),
-    [minimumSimilarity, targetSellThrough],
+      }));
+    },
+    [minimumSimilarity, targetSellThrough, dataRevision],
   );
 
   const queueItems = useMemo(() => {
@@ -707,7 +1454,7 @@ function App() {
   function chooseItem(id: string) {
     setSelectedId(id);
     setFocusedHistoricalId(null);
-    setTab("compare");
+    chooseTab("compare");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -850,7 +1597,7 @@ function App() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <button className="brand" onClick={() => setTab("compare")} aria-label="Open comparison workspace">
+        <button className="brand" onClick={() => chooseTab("compare")} aria-label="Open comparison workspace">
           <span className="brand-mark">T</span>
           <span>
             <strong>TURTLE</strong>
@@ -861,19 +1608,43 @@ function App() {
           {([
             ["compare", "Compare"],
             ["portfolio", "Portfolio"],
+            ["upload", "New analysis"],
           ] as [Tab, string][]).map(([key, label]) => (
-            <button key={key} className={tab === key ? "active" : ""} onClick={() => setTab(key)}>
+            <button key={key} className={tab === key ? "active" : ""} onClick={() => chooseTab(key)}>
               {label}
             </button>
           ))}
         </nav>
         <div className="top-actions">
-          <span className="sync-state"><i /> Recommendations up to date</span>
+          <span className="sync-state">
+            <i /> {activeBuildId
+              ? `Last updated · ${formatAnalysisDate(activeBuildCreatedAt)}`
+              : "No recommendations available"}
+          </span>
           <span className="avatar" aria-label="Planner profile">SD</span>
         </div>
       </header>
 
-      {tab === "compare" && (
+      {(tab === "compare" || tab === "portfolio") && !hasActiveBuild && (
+        <section className="page-wrap no-build-state" aria-live="polite">
+          <span className="eyebrow">{serviceError ? "Analysis service unavailable" : "No recommendations available"}</span>
+          <h1>{serviceError ? "The planner cannot load its data" : "Upload a catalogue to start planning"}</h1>
+          {serviceError ? (
+            <p className="service-error">{serviceError}</p>
+          ) : (
+            <p>
+              The planner reads only the analysis you upload. Add a historical and an
+              upcoming catalogue with their product images in <strong>New analysis</strong>;
+              the comparison and portfolio views open as soon as the build activates.
+            </p>
+          )}
+          <button className="button primary" onClick={() => chooseTab("upload")}>
+            Start a new analysis
+          </button>
+        </section>
+      )}
+
+      {tab === "compare" && hasActiveBuild && (
         <div className="comparison-shell">
           <aside className="queue-panel">
             <div className="queue-heading">
@@ -1341,7 +2112,7 @@ function App() {
         </div>
       )}
 
-      {tab === "portfolio" && (
+      {tab === "portfolio" && hasActiveBuild && (
         <section className="portfolio-page page-wrap">
           <div className="page-heading">
             <div><span className="eyebrow">Upcoming assortment</span><h1>Portfolio recommendation</h1><p>Review expected sales, analogue evidence, uncertainty and recommended initial orders across the complete {dataset.meta.upcomingSeason} assortment.</p></div>
@@ -1454,6 +2225,18 @@ function App() {
           </div>
         </section>
       )}
+
+      {/* Keep this workspace mounted across navigation. Unmounting it loses the
+          selected files, upload counters, and live EventSource connection. */}
+      <NewAnalysis
+        active={tab === "upload"}
+        historical={activeHistorical}
+        onActivated={async (buildId) => {
+          await refreshActive(buildId);
+          setTab("compare");
+          setToast("New recommendations activated");
+        }}
+      />
 
       {toast && <div className="toast" role="status">✓ {toast}</div>}
     </main>

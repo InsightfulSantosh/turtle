@@ -4,17 +4,18 @@
 # --- Core (always required: data pipeline + machine learning) ---
 numpy>=2.0,<3
 openpyxl>=3.1,<4
+pyxlsb>=1.0.10,<2
+fastapi>=0.139,<1
+uvicorn[standard]>=0.51,<1
 
 # --- Dev tooling (tests, lint) ---
 pytest>=8.4,<9
 ruff>=0.12,<1
 
-# --- Fashion matching (visual retrieval: encoders, Qdrant, image processing) ---
+# --- Fashion matching (visual retrieval: encoders, image processing) ---
 ftfy>=6.3,<7
-httpx>=0.28,<1
 open-clip-torch>=3.2,<4
 Pillow>=11,<12
 faiss-cpu>=1.8,<2; platform_system != "Darwin"
-qdrant-client>=1.14,<2
 torch>=2.7,<3
 transformers>=4.52,<5
