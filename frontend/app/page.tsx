@@ -133,7 +133,7 @@ type Decision = {
 
 /**
  * The workspace ships with no catalogue of its own: every number it shows comes
- * from a build the user uploaded through the New analysis tab. Until one is
+ * from a build the user uploaded through Build recommendations. Until one is
  * activated the planner runs on this empty dataset and renders its empty state.
  */
 const EMPTY_DATASET: Dataset = {
@@ -1186,7 +1186,7 @@ function NewAnalysis({
     "upload-failed": { label: "Resume upload", onClick: uploadFiles },
     uploaded: { label: "Start analysis", onClick: startAnalysis },
     analysing: { label: "Analysis running…", onClick: startAnalysis },
-    done: { label: "Start another analysis", onClick: resetForNewUpload },
+    done: { label: "Build new recommendations", onClick: resetForNewUpload },
   }[phase];
   const primaryDisabled = running || (phase === "idle" && Boolean(missingSelection()));
   const elapsedSeconds = run ? analysisElapsedSeconds(run, elapsedClock) : null;
@@ -1195,12 +1195,25 @@ function NewAnalysis({
   return (
     <section className="upload-workspace page-wrap" hidden={!active}>
       <div className="upload-hero">
-        <span className="eyebrow">Versioned catalogue analysis</span>
-        <h1>New analysis</h1>
-        <p>The current planner stays available until every new recommendation is complete and validated.</p>
-        <div className="template-links">
-          <a href="/templates/historical-catalogue.csv">Historical CSV template</a>
-          <a href="/templates/upcoming-catalogue.csv">Upcoming CSV template</a>
+        <span className="eyebrow">Catalogue build</span>
+        <h1>Build recommendations</h1>
+        <p>Upload catalogue data and product images to create a validated recommendation build. Your current planner remains available until the new build is ready.</p>
+        <div className="template-links" aria-label="Catalogue CSV templates">
+          <div className="template-guide-copy">
+            <i aria-hidden="true">CSV</i>
+            <span>
+              <strong>Catalogue templates</strong>
+              <small>Correct columns with one example row included.</small>
+            </span>
+          </div>
+          <a href="/templates/historical-catalogue.csv" download>
+            <span><small>Historical catalogue</small><strong>Download CSV template</strong></span>
+            <i aria-hidden="true">↓</i>
+          </a>
+          <a href="/templates/upcoming-catalogue.csv" download>
+            <span><small>Upcoming catalogue</small><strong>Download CSV template</strong></span>
+            <i aria-hidden="true">↓</i>
+          </a>
         </div>
       </div>
       <div className="analysis-mode-grid">
@@ -1395,7 +1408,7 @@ function App() {
         .then(() => {
           setServiceError("");
           // The first render has no dataset — the build is fetched — so the
-          // workspace opens on New analysis. Once a build does load, move to
+          // workspace opens on Build recommendations. Once a build does load, move to
           // Compare, unless the user has already picked a tab themselves.
           if (visibleUpcoming.length > 0 && !tabChosenByUser.current) setTab("compare");
         })
@@ -1608,7 +1621,7 @@ function App() {
           {([
             ["compare", "Compare"],
             ["portfolio", "Portfolio"],
-            ["upload", "New analysis"],
+            ["upload", "Build recommendations"],
           ] as [Tab, string][]).map(([key, label]) => (
             <button key={key} className={tab === key ? "active" : ""} onClick={() => chooseTab(key)}>
               {label}
@@ -1634,12 +1647,12 @@ function App() {
           ) : (
             <p>
               The planner reads only the analysis you upload. Add a historical and an
-              upcoming catalogue with their product images in <strong>New analysis</strong>;
+              upcoming catalogue with their product images in <strong>Build recommendations</strong>;
               the comparison and portfolio views open as soon as the build activates.
             </p>
           )}
           <button className="button primary" onClick={() => chooseTab("upload")}>
-            Start a new analysis
+            Build recommendations
           </button>
         </section>
       )}

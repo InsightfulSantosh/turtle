@@ -51,15 +51,104 @@
 }
 
 .template-links {
-  display: flex;
-  gap: 18px;
+  align-items: center;
+  background: linear-gradient(110deg, rgb(255 254 250 / 92%), rgb(238 247 216 / 45%));
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(230px, 1fr) minmax(185px, auto) minmax(185px, auto);
   margin-top: 20px;
+  padding: 10px;
+}
+
+.template-guide-copy {
+  align-items: center;
+  display: flex;
+  gap: 11px;
+  padding: 3px 7px;
+}
+
+.template-guide-copy > i {
+  align-items: center;
+  background: var(--forest);
+  border-radius: 9px;
+  color: white;
+  display: inline-flex;
+  flex: 0 0 34px;
+  font-size: 8px;
+  font-style: normal;
+  font-weight: 900;
+  height: 34px;
+  justify-content: center;
+  letter-spacing: .08em;
+}
+
+.template-links strong,
+.template-links small,
+.template-links a span {
+  display: block;
+}
+
+.template-guide-copy strong {
+  font-size: 12px;
+}
+
+.template-guide-copy small {
+  color: var(--muted);
+  font-size: 10px;
+  margin-top: 2px;
 }
 
 .template-links a,
 .upload-error a {
   color: var(--forest);
   font-weight: 800;
+}
+
+.template-links a {
+  align-items: center;
+  background: var(--paper);
+  border: 1px solid var(--line-dark);
+  border-radius: 11px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-height: 50px;
+  padding: 8px 10px 8px 12px;
+  text-decoration: none;
+}
+
+.template-links a:hover {
+  background: white;
+  border-color: var(--forest-2);
+  box-shadow: 0 5px 18px rgb(18 33 28 / 8%);
+}
+
+.template-links a small {
+  color: var(--muted);
+  font-size: 8px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.template-links a strong {
+  font-size: 10px;
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+.template-links a > i {
+  align-items: center;
+  background: var(--lime-soft);
+  border-radius: 8px;
+  color: var(--forest);
+  display: inline-flex;
+  flex: 0 0 30px;
+  font-size: 15px;
+  font-style: normal;
+  height: 30px;
+  justify-content: center;
 }
 
 .analysis-mode-grid,
@@ -2647,6 +2736,14 @@ select {
 }
 
 @media (max-width: 960px) {
+  .template-links {
+    grid-template-columns: 1fr;
+  }
+
+  .template-links a {
+    width: 100%;
+  }
+
   .topbar {
     grid-template-columns: 1fr auto;
     padding: 0 16px;

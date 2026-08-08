@@ -90,6 +90,16 @@ test("ships the dual-mode resumable upload workflow", async () => {
   assert.match(pageSource, /full_replace/);
   assert.match(pageSource, /reuse_historical/);
   assert.match(pageSource, /Reuse trained historical/);
+  assert.match(pageSource, /Build recommendations/);
+  assert.match(pageSource, /Upload catalogue data and product images to create a validated recommendation build/);
+  assert.match(pageSource, /Catalogue templates/);
+  assert.match(pageSource, /Correct columns with one example row included/);
+  assert.match(pageSource, /Download CSV template/);
+  assert.match(pageSource, /historical-catalogue\.csv" download/);
+  assert.match(pageSource, /upcoming-catalogue\.csv" download/);
+  assert.doesNotMatch(pageSource, />Historical CSV template</);
+  assert.doesNotMatch(pageSource, />Upcoming CSV template</);
+  assert.doesNotMatch(pageSource, />New analysis</);
   assert.match(pageSource, /webkitdirectory/);
   assert.match(pageSource, /uploadPool/);
   assert.match(pageSource, /complete-upload/);

@@ -9,7 +9,7 @@ quantity for each upcoming style.
 Everything the planner shows comes from a build the user uploaded. The
 repository ships no catalogue, no images and no pre-generated artifact — until
 the first build is activated, the workspace shows its empty state and only the
-**New analysis** tab does anything.
+**Build recommendations** tab does anything.
 
 > Forecasts are planning evidence, not production certification. Image-match
 > thresholds, model revisions, and demand uncertainty should be reviewed before
@@ -37,7 +37,7 @@ documented in [FASHION_MATCHING.md](FASHION_MATCHING.md).
 ## Architecture
 
 ```text
-Browser: New analysis tab
+Browser: Build recommendations tab
   resumable catalogue + image uploads
              |
              v
@@ -66,7 +66,7 @@ turtle/
 │   ├── src/machine_learning/     Demand forecast and order-quantity logic
 │   └── tests/                    Python unit and contract tests
 ├── frontend/
-│   ├── app/                      Next.js planner and New analysis workspace
+│   ├── app/                      Next.js planner and recommendation build workspace
 │   ├── public/templates/         Downloadable catalogue CSV templates
 │   └── tests/                    Planner contract tests
 ├── DATA/                         Created at runtime; ignored by Git
@@ -117,7 +117,7 @@ make frontend-dev
 ```
 
 Open [http://localhost:3000](http://localhost:3000). The workspace opens on
-**New analysis** because no build exists yet. Upload a catalogue pair to
+**Build recommendations** because no build exists yet. Upload a catalogue pair to
 populate the comparison and portfolio views.
 
 The first visual build downloads the configured encoder weights through the
@@ -131,7 +131,7 @@ without the analysis service running.
 
 ## End-user catalogue uploads
 
-The **New analysis** workspace supports two safe replacement modes:
+The **Build recommendations** workspace supports two safe replacement modes:
 
 - **Replace historical + upcoming** uploads both catalogues and image sets,
   builds a new historical demand/visual index, and activates it only after all
@@ -267,7 +267,7 @@ npx tsc --noEmit
 
 ## Frontend behavior
 
-The planner has comparison and portfolio views, plus the New analysis workspace.
+The planner has comparison and portfolio views, plus the Build recommendations workspace.
 It lets a user inspect the selected upcoming style, the ranked historical visual
 evidence, uncertainty bands, sales expectation, and recommended initial order.
 Changing the minimum visual similarity or target sell-through recalculates the
